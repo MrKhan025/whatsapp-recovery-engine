@@ -11,6 +11,7 @@ from wtk.reports import (
     write_backup_comparison_report,
     write_verification_certificate,
 )
+from wtk.sample_bootstrap import ensure_sample_data
 
 
 def test_status_and_i18n() -> None:
@@ -19,7 +20,7 @@ def test_status_and_i18n() -> None:
     assert r.status_code == 200
     data = r.json()
     assert data["offline"] is True
-    assert data["version"] == "3.0.0"
+    assert data["version"] == "1.0.0"
 
     for lang in ("en", "hi", "ur"):
         ir = client.get(f"/api/i18n/{lang}")
@@ -40,6 +41,7 @@ def test_android_and_security_endpoints() -> None:
 
 
 def test_full_api_workflow(tmp_path: Path) -> None:
+    ensure_sample_data(SAMPLE_DATA_DIR)
     client = TestClient(app)
     v1_path = SAMPLE_DATA_DIR / "snapshot_v1"
     v2_path = SAMPLE_DATA_DIR / "snapshot_v2"
@@ -96,6 +98,7 @@ def test_full_api_workflow(tmp_path: Path) -> None:
 
 
 def test_chat_exports_and_reports(tmp_path: Path) -> None:
+    ensure_sample_data(SAMPLE_DATA_DIR)
     v2_exports = SAMPLE_DATA_DIR / "snapshot_v2" / "Exports"
     txt_res = parse_chat_export(v2_exports / "WhatsApp Chat with Operations Team.txt")
     json_res = parse_chat_export(v2_exports / "chat_export.json")
@@ -108,7 +111,6 @@ def test_chat_exports_and_reports(tmp_path: Path) -> None:
     s_res = search_chat_messages(txt_res["messages"], query="checksums")
     assert s_res["match_count"] == 1
 
-    # Verify report generation on disk
     from wtk.scanner import scan_tree
     report = scan_tree(SAMPLE_DATA_DIR / "snapshot_v2")
     out_dir = tmp_path / "reports_out"
