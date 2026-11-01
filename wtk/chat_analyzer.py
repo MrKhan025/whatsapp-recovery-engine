@@ -2,13 +2,12 @@
 
 Capabilities:
 - Detect accessible WhatsApp SQLite chat database files (`msgstore.db`, `wa.db`, etc.)
+- Inspect companion SQLite Write-Ahead Log (`-wal`) and rollback journal (`-journal`) files in read-only mode
 - Identify SQLite database formats and WhatsApp schema generations (modern `message`/`chat` vs legacy `messages`/`chat_list` vs `wa_contacts`)
-- Inspect database integrity using strictly read-only SQLite operations (`PRAGMA integrity_check`, `PRAGMA quick_check`, `PRAGMA query_only=ON`)
-- Extract database tables, schemas, column definitions, record counts, and timestamp ranges
+- Inspect database integrity using strictly read-only SQLite operations (`PRAGMA integrity_check`, `PRAGMA query_only=ON`)
+- Cross-reference `message_media` database rows against scanned disk files (`link_chat_media`)
 - Parse and preview user-provided TXT, JSON, and HTML chat exports
-- Provide searchable chat export & accessible database previews
-- Compare two accessible database snapshots or chat exports to identify missing (historically present), changed, and newly discovered records
-- Never claims deleted messages can be recovered unless an accessible source contains them
+- Compare two accessible database snapshots to identify missing (historically present), changed, and newly discovered records
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ import html
 import json
 import re
 import sqlite3
+import struct
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -26,6 +26,9 @@ from typing import Any
 from .security import open_sqlite_readonly, sanitize_search_query, sha256_file, validate_safe_path
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
+WAL_MAGIC_VALUES = (0x377F0682, 0x377F0683)
+WAL_HEADER_SIZE = 32
+WAL_FRAME_HEADER_SIZE = 24
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _TXT_PATTERNS = [
@@ -62,6 +65,132 @@ def is_sqlite_file(path: Path | str) -> bool:
         return False
 
 
+def inspect_sqlite_wal(db_path: Path | str) -> dict[str, Any]:
+    """Inspect companion `-wal` (Write-Ahead Log) and `-journal` files alongside a SQLite database in read-only mode."""
+    p = Path(db_path)
+    wal_path = p.with_name(p.name + "-wal")
+    journal_path = p.with_name(p.name + "-journal")
+
+    result: dict[str, Any] = {
+        "wal_present": False,
+        "journal_present": False,
+        "wal_size": 0,
+        "wal_valid_header": False,
+        "uncheckpointed_frames": 0,
+        "page_size": 0,
+        "checkpoint_seq": 0,
+    }
+
+    if journal_path.exists() and journal_path.is_file() and not journal_path.is_symlink():
+        result["journal_present"] = True
+        result["journal_size"] = journal_path.stat().st_size
+
+    if wal_path.exists() and wal_path.is_file() and not wal_path.is_symlink():
+        wal_size = wal_path.stat().st_size
+        result["wal_present"] = True
+        result["wal_size"] = wal_size
+        if wal_size >= WAL_HEADER_SIZE:
+            try:
+                with wal_path.open("rb") as f:
+                    hdr = f.read(WAL_HEADER_SIZE)
+                magic, fmt_ver, page_sz, chk_seq = struct.unpack(">IIII", hdr[:16])
+                if magic in WAL_MAGIC_VALUES and page_sz >= 512:
+                    result["wal_valid_header"] = True
+                    result["format_version"] = fmt_ver
+                    result["page_size"] = page_sz
+                    result["checkpoint_seq"] = chk_seq
+                    frame_bytes = page_sz + WAL_FRAME_HEADER_SIZE
+                    result["uncheckpointed_frames"] = max(0, (wal_size - WAL_HEADER_SIZE) // frame_bytes)
+            except OSError:
+                result["wal_valid_header"] = False
+
+    return result
+
+
+def link_chat_media(
+    db_path: Path | str,
+    scanned_entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Cross-reference rows in the SQLite `message_media` table against scanned files on disk."""
+    file_path = validate_safe_path(db_path, must_exist=True, allow_symlinks=False, reject_traversal_tokens=False)
+    if not is_sqlite_file(file_path):
+        return {"supported": False, "linked_count": 0, "missing_count": 0, "linked": [], "missing": []}
+
+    by_name: dict[str, dict[str, Any]] = {}
+    by_sha: dict[str, dict[str, Any]] = {}
+    for entry in scanned_entries:
+        if entry.get("kind") == "media":
+            by_name[entry.get("name", "")] = entry
+            if entry.get("sha256"):
+                by_sha[entry["sha256"]] = entry
+
+    linked: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+
+    try:
+        conn = open_sqlite_readonly(file_path)
+        try:
+            tables = {
+                str(r["name"]).lower(): str(r["name"])
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+                ).fetchall()
+            }
+            if "message_media" not in tables:
+                return {"supported": True, "has_media_table": False, "linked_count": 0, "missing_count": 0, "linked": [], "missing": []}
+
+            tname = _quote_ident(tables["message_media"])
+            cols = {
+                str(c["name"]).lower(): str(c["name"])
+                for c in conn.execute(f"PRAGMA table_info({tname});").fetchall()  # nosec
+                if _SAFE_IDENT_RE.match(str(c["name"]))
+            }
+            path_col = cols.get("file_path") or cols.get("media_name") or cols.get("file_name")
+            sha_col = cols.get("file_hash") or cols.get("sha256")
+            size_col = cols.get("file_size") or cols.get("media_size")
+            msg_col = cols.get("message_row_id") or cols.get("_id")
+
+            if not path_col and not sha_col:
+                return {"supported": True, "has_media_table": True, "linked_count": 0, "missing_count": 0, "linked": [], "missing": []}
+
+            sel_parts = [
+                f"{_quote_ident(msg_col)} AS msg_id" if msg_col else "rowid AS msg_id",
+                f"{_quote_ident(path_col)} AS fpath" if path_col else "'' AS fpath",
+                f"{_quote_ident(sha_col)} AS fhash" if sha_col else "'' AS fhash",
+                f"{_quote_ident(size_col)} AS fsize" if size_col else "0 AS fsize",
+            ]
+            sel_joined = ", ".join(sel_parts)
+            q = f"SELECT {sel_joined} FROM {tname} LIMIT 500;"  # nosec
+            for row in conn.execute(q).fetchall():
+                raw_fp = str(row["fpath"] or "")
+                fname = Path(raw_fp).name if raw_fp else ""
+                fhash = str(row["fhash"] or "")
+                matched_entry = by_sha.get(fhash) or by_name.get(fname)
+                rec = {
+                    "message_id": str(row["msg_id"]),
+                    "referenced_path": raw_fp,
+                    "referenced_name": fname,
+                    "referenced_size": int(row["fsize"] or 0),
+                }
+                if matched_entry:
+                    linked.append({**rec, "disk_path": matched_entry["path"], "disk_sha256": matched_entry.get("sha256", "")})
+                else:
+                    missing.append(rec)
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError, ValueError):
+        return {"supported": False, "linked_count": 0, "missing_count": 0, "linked": [], "missing": []}
+
+    return {
+        "supported": True,
+        "has_media_table": True,
+        "linked_count": len(linked),
+        "missing_count": len(missing),
+        "linked": linked,
+        "missing": missing,
+    }
+
+
 def _normalize_timestamp(val: Any) -> str | None:
     """Convert epoch milliseconds, epoch seconds, or ISO strings into ISO-8601 UTC."""
     if val is None or val == "":
@@ -88,6 +217,7 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
     """Perform a comprehensive, read-only forensic inspection of a SQLite database."""
     file_path = validate_safe_path(path, must_exist=True, allow_symlinks=False, reject_traversal_tokens=False)
     stat = file_path.stat()
+    wal_info = inspect_sqlite_wal(file_path)
     base_info: dict[str, Any] = {
         "name": file_path.name,
         "path": str(file_path),
@@ -95,6 +225,7 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
         "modified": int(stat.st_mtime),
         "sha256": sha256_file(file_path) if stat.st_size > 0 else "",
         "is_sqlite": is_sqlite_file(file_path),
+        "wal_diagnostics": wal_info,
         "supported": False,
         "ok": False,
         "integrity": "unsupported_or_encrypted",
@@ -124,7 +255,7 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
         if "crypt" in suffix_lower or "crypt" in file_path.name.lower():
             base_info["format_type"] = f"encrypted_whatsapp_backup ({suffix_lower.lstrip('.')})"
             base_info["integrity"] = "encrypted_not_sqlite"
-            base_info["detail"] = "Encrypted WhatsApp .crypt* backup; decryption is not performed."
+            base_info["detail"] = "Encrypted WhatsApp .crypt* backup; decryption is not performed automatically."
         else:
             base_info["detail"] = "File does not have a valid SQLite3 header."
         return base_info
