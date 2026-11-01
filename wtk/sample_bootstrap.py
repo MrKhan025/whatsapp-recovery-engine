@@ -3,7 +3,7 @@
 Ensures that `sample-data/snapshot_v1` and `sample-data/snapshot_v2` are always present
 with valid SQLite databases, `.crypt14` headers, TXT/JSON/HTML chat exports, and
 media files across all 8 categories—even if a user cloned or uploaded the repository
-without binary sample files.
+without binary sample files or created empty placeholder files via the GitHub web editor.
 """
 
 from __future__ import annotations
@@ -13,6 +13,18 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+
+SQLITE_HEADER = b"SQLite format 3\x00"
+
+
+def _is_valid_sqlite(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size < 4096:
+            return False
+        with path.open("rb") as f:
+            return f.read(16) == SQLITE_HEADER
+    except OSError:
+        return False
 
 
 def _build_sqlite_db(target_path: Path, statements: list[str], rows_sql: str, rows: list[tuple]) -> None:
@@ -32,16 +44,25 @@ def _build_sqlite_db(target_path: Path, statements: list[str], rows_sql: str, ro
 
 
 def ensure_sample_data(sample_root: Path | str) -> Path:
-    """Create synthetic, zero-PII `snapshot_v1` and `snapshot_v2` datasets if missing."""
+    """Create or repair synthetic, zero-PII `snapshot_v1` and `snapshot_v2` datasets."""
     root = Path(sample_root)
     v1 = root / "snapshot_v1"
     v2 = root / "snapshot_v2"
 
-    marker = v2 / "Exports" / "chat_export.html"
+    v1_db = v1 / "Databases" / "msgstore.db"
+    v2_db = v2 / "Databases" / "msgstore.db"
+    v2_wa = v2 / "Databases" / "wa.db"
+    marker_html = v2 / "Exports" / "chat_export.html"
+    marker_img = v2 / "Media" / "WhatsApp Images" / "IMG-20261001-WA0001.jpg"
+
     if (
-        (v1 / "Databases" / "msgstore.db").exists()
-        and (v2 / "Databases" / "msgstore.db").exists()
-        and marker.exists()
+        _is_valid_sqlite(v1_db)
+        and _is_valid_sqlite(v2_db)
+        and _is_valid_sqlite(v2_wa)
+        and marker_html.exists()
+        and marker_html.stat().st_size > 20
+        and marker_img.exists()
+        and marker_img.stat().st_size > 20
     ):
         return root
 
@@ -55,7 +76,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
 
     # 1. Snapshot v1 SQLite DB & Media
     _build_sqlite_db(
-        v1 / "Databases" / "msgstore.db",
+        v1_db,
         msg_schema,
         "INSERT INTO message VALUES (?, ?, ?, ?, ?);",
         [
@@ -86,7 +107,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
 
     # 2. Snapshot v2 SQLite DBs & Encrypted Backups
     _build_sqlite_db(
-        v2 / "Databases" / "msgstore.db",
+        v2_db,
         msg_schema,
         "INSERT INTO message VALUES (?, ?, ?, ?, ?);",
         [
@@ -98,7 +119,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         ],
     )
     _build_sqlite_db(
-        v2 / "Databases" / "wa.db",
+        v2_wa,
         [
             "CREATE TABLE wa_contacts (_id INTEGER PRIMARY KEY, jid TEXT, display_name TEXT);",
             "INSERT INTO wa_contacts VALUES (1, 'participant_a@s.whatsapp.net', 'Participant Alpha');",
@@ -112,7 +133,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
     )
     (v2 / "Databases" / "msgstore-empty.db.crypt14").write_bytes(b"")
 
-    # 3. Snapshot v2 Media across all 8 categories (using visible `Thumbs` folder so mobile file managers never hide it)
+    # 3. Snapshot v2 Media across all 8 categories
     for sub in (
         "WhatsApp Images",
         "WhatsApp Images/Thumbs",
