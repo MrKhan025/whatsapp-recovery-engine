@@ -1,4 +1,4 @@
-"""FastAPI Backend (`wtk/api.py`) for WhatsApp Recovery Engine – Advanced Edition."""
+"""FastAPI Backend (`wtk/api.py`) for WhatsApp Recovery Engine – v1.0."""
 
 from __future__ import annotations
 
@@ -29,17 +29,18 @@ from .reports import (
     write_json,
     write_verification_certificate,
 )
+from .sample_bootstrap import ensure_sample_data
 from .scanner import is_within, scan_tree
 from .security import audit_dependencies, validate_safe_path
 
 app = FastAPI(
-    title="WhatsApp Recovery Engine – Advanced Edition",
+    title="WhatsApp Recovery Engine",
     version=__version__,
     description="Offline-first WhatsApp backup analysis, chat inspection, media discovery, SHA-256 verification, and forensic reporting platform.",
 )
 
 BASE = Path(__file__).resolve().parent.parent
-SAMPLE_DATA_DIR = BASE / "sample-data"
+SAMPLE_DATA_DIR = ensure_sample_data(BASE / "sample-data")
 REPORT_DIR = Path.home() / ".wte-reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -66,6 +67,7 @@ def _check_within_allowed(target: Path) -> bool:
 @app.get("/api/status")
 def status() -> dict[str, Any]:
     """Return service health, offline posture, ADB check, and sample data availability."""
+    ensure_sample_data(SAMPLE_DATA_DIR)
     return {
         "status": "ok",
         "offline": True,
@@ -100,6 +102,7 @@ def security_audit() -> dict[str, Any]:
 def scan(payload: dict[str, Any]) -> dict[str, Any]:
     """Scan a user-authorized directory in read-only mode and generate forensic reports."""
     global LAST_REPORT
+    ensure_sample_data(SAMPLE_DATA_DIR)
     source = payload.get("source")
     if not isinstance(source, str) or not source.strip():
         raise HTTPException(400, "A source directory is required")

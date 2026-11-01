@@ -1,4 +1,4 @@
-"""Command-Line Interface (`wtk/cli.py`) for WhatsApp Recovery Engine – Advanced Edition."""
+"""Command-Line Interface (`wtk/cli.py`) for WhatsApp Recovery Engine – v1.0."""
 
 from __future__ import annotations
 
@@ -9,11 +9,12 @@ from pathlib import Path
 
 import uvicorn
 
-from .adb import device_check, get_android_guidance
+from .adb import get_android_guidance
 from .chat_analyzer import compare_chat_databases, inspect_chat_database, parse_chat_export
 from .engine import compare_snapshots, load_snapshot, verified_export
 from .reports import generate_all_scan_reports, write_json, write_verification_certificate
-from .scanner import inspect_sqlite, scan_tree
+from .sample_bootstrap import ensure_sample_data
+from .scanner import scan_tree
 from .security import audit_dependencies
 
 
@@ -21,7 +22,7 @@ def main() -> None:
     """Main CLI entry point for `python -m wtk`."""
     parser = argparse.ArgumentParser(
         prog="wtk",
-        description="WhatsApp Recovery Engine (v3.0) – Offline backup analysis, chat inspection, media discovery & SHA-256 verification",
+        description="WhatsApp Recovery Engine (v1.0) – Offline backup analysis, chat inspection, media discovery & SHA-256 verification",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -50,6 +51,7 @@ def main() -> None:
 
     sub.add_parser("adb-check", help="Check connected ADB devices and Android guidance")
     sub.add_parser("security-audit", help="Run local security and dependency posture check")
+    sub.add_parser("init-sample", help="Generate synthetic zero-PII sample data in ./sample-data")
 
     srv = sub.add_parser("serve", help="Start the local responsive web dashboard")
     srv.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
@@ -57,7 +59,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "scan":
+    if args.command == "init-sample":
+        root = ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
+        print(f"Sample data initialized at: {root}")
+
+    elif args.command == "scan":
+        ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
         report = scan_tree(args.source)
         out = Path(args.output)
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -93,6 +100,7 @@ def main() -> None:
         print(json.dumps(audit_dependencies(), indent=2))
 
     elif args.command == "serve":
+        ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
         uvicorn.run("wtk.api:app", host=args.host, port=args.port, reload=False)
 
 

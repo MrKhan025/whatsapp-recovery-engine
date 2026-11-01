@@ -243,7 +243,7 @@ def write_verification_certificate(
     pdf.setTitle("WhatsApp Recovery Engine - Verification Certificate")
 
     header_lines = [
-        "WHATSAPP RECOVERY ENGINE - RECOVERY VERIFICATION CERTIFICATE",
+        "WHATSAPP RECOVERY ENGINE (v1.0) - RECOVERY VERIFICATION CERTIFICATE",
         f"Certificate ID: {verification_result.get('certificate_id', 'N/A')}",
         f"Timestamp: {verification_result.get('timestamp', _utc_now())}",
         f"Source Root: {verification_result.get('source_root', '')}",
@@ -290,7 +290,7 @@ def write_pdf(report: dict[str, Any], output: Path | str, filename: str = "recov
     cats = report.get("category_counts", {})
 
     lines = [
-        "WHATSAPP RECOVERY ENGINE (v3.0) - FORENSIC SCAN & HEALTH REPORT",
+        "WHATSAPP RECOVERY ENGINE (v1.0) - FORENSIC SCAN & HEALTH REPORT",
         f"Generated At: {report.get('timestamp', _utc_now())}",
         f"Scanned Source: {report.get('source', '')}",
         f"Total Files Scanned: {report.get('files_scanned', 0)} | Media Files: {report.get('media_count', 0)} | Corrupt Media: {report.get('corrupt_media_count', 0)}",

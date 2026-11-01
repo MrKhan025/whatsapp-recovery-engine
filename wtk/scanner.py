@@ -202,7 +202,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
     backup_health = generate_backup_health_report(entries, source_root=str(root))
 
     report: dict[str, Any] = {
-        "version": 3,
+        "version": 1,
         "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "source": str(root),
         "files_scanned": visited,

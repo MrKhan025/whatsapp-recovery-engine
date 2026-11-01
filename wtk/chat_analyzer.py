@@ -26,6 +26,7 @@ from typing import Any
 from .security import open_sqlite_readonly, sanitize_search_query, sha256_file, validate_safe_path
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
+_SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Regex patterns for standard WhatsApp TXT chat exports across Android and iOS locales
 _TXT_PATTERNS = [
@@ -42,6 +43,13 @@ _TXT_PATTERNS = [
         r"(?:(?P<sender>[^:]{1,80}):\s*)?(?P<text>.*)$"
     ),
 ]
+
+
+def _quote_ident(name: str) -> str:
+    """Validate and double-quote a SQLite table or column identifier from sqlite_master."""
+    if not _SAFE_IDENT_RE.match(name):
+        raise ValueError(f"Unsafe SQLite identifier rejected: {name}")
+    return f'"{name}"'
 
 
 def is_sqlite_file(path: Path | str) -> bool:
@@ -154,11 +162,13 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
 
             for trow in table_rows:
                 tname = str(trow["name"])
+                if not _SAFE_IDENT_RE.match(tname):
+                    continue
                 tsql = str(trow["sql"] or "")
                 table_names.append(tname)
-                safe_tname = tname.replace('"', '""')
+                quoted_tname = _quote_ident(tname)
                 try:
-                    cnt_row = conn.execute(f'SELECT COUNT(*) FROM "{safe_tname}";').fetchone()
+                    cnt_row = conn.execute(f"SELECT COUNT(*) FROM {quoted_tname};").fetchone()  # nosec B608
                     row_count = int(cnt_row[0]) if cnt_row else 0
                 except sqlite3.DatabaseError:
                     row_count = 0
@@ -166,7 +176,7 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
 
                 cols_info = []
                 try:
-                    for col in conn.execute(f'PRAGMA table_info("{safe_tname}");').fetchall():
+                    for col in conn.execute(f"PRAGMA table_info({quoted_tname});").fetchall():  # nosec B608
                         cols_info.append({
                             "name": str(col["name"]),
                             "type": str(col["type"] or "ANY"),
@@ -235,8 +245,12 @@ def _extract_messages_from_conn(
         return [], None, None, 0
 
     target_table = candidates[0]
-    safe_table = target_table.replace('"', '""')
-    col_names = {c["name"].lower(): c["name"] for c in schemas.get(target_table, {}).get("columns", [])}
+    quoted_table = _quote_ident(target_table)
+    col_names = {
+        c["name"].lower(): c["name"]
+        for c in schemas.get(target_table, {}).get("columns", [])
+        if _SAFE_IDENT_RE.match(c["name"])
+    }
 
     id_col = (
         col_names.get("_id")
@@ -273,10 +287,10 @@ def _extract_messages_from_conn(
     max_ts_str: str | None = None
 
     if ts_col:
-        safe_ts = ts_col.replace('"', '""')
+        quoted_ts = _quote_ident(ts_col)
         try:
-            bounds = conn.execute(
-                f'SELECT MIN("{safe_ts}"), MAX("{safe_ts}") FROM "{safe_table}" WHERE "{safe_ts}" IS NOT NULL AND "{safe_ts}" != 0;'
+            bounds = conn.execute(  # nosec B608
+                f"SELECT MIN({quoted_ts}), MAX({quoted_ts}) FROM {quoted_table} WHERE {quoted_ts} IS NOT NULL AND {quoted_ts} != 0;"
             ).fetchone()
             if bounds:
                 min_ts_str = _normalize_timestamp(bounds[0])
@@ -285,14 +299,14 @@ def _extract_messages_from_conn(
             pass
 
     select_exprs = []
-    select_exprs.append(f'"{id_col}" AS msg_id' if id_col else "rowid AS msg_id")
-    select_exprs.append(f'"{sender_col}" AS sender' if sender_col else "'unknown' AS sender")
-    select_exprs.append(f'"{text_col}" AS text_body' if text_col else "'' AS text_body")
-    select_exprs.append(f'"{ts_col}" AS raw_ts' if ts_col else "NULL AS raw_ts")
-    select_exprs.append(f'"{from_me_col}" AS from_me' if from_me_col else "0 AS from_me")
+    select_exprs.append(f"{_quote_ident(id_col)} AS msg_id" if id_col else "rowid AS msg_id")
+    select_exprs.append(f"{_quote_ident(sender_col)} AS sender" if sender_col else "'unknown' AS sender")
+    select_exprs.append(f"{_quote_ident(text_col)} AS text_body" if text_col else "'' AS text_body")
+    select_exprs.append(f"{_quote_ident(ts_col)} AS raw_ts" if ts_col else "NULL AS raw_ts")
+    select_exprs.append(f"{_quote_ident(from_me_col)} AS from_me" if from_me_col else "0 AS from_me")
 
-    order_clause = f'ORDER BY "{ts_col}" ASC' if ts_col else "ORDER BY msg_id ASC"
-    query = f'SELECT {", ".join(select_exprs)} FROM "{safe_table}" {order_clause} LIMIT ?;'
+    order_clause = f"ORDER BY {_quote_ident(ts_col)} ASC" if ts_col else "ORDER BY msg_id ASC"
+    query = f'SELECT {", ".join(select_exprs)} FROM {quoted_table} {order_clause} LIMIT ?;'  # nosec B608
 
     messages: list[dict[str, Any]] = []
     try:

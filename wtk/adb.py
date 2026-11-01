@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +43,19 @@ TERMUX_COMMANDS = {
     ),
 }
 
+_ALLOWED_PROPS = {
+    "ro.product.manufacturer",
+    "ro.build.version.release",
+    "ro.build.version.sdk",
+}
+
 
 def _query_authorized_prop(adb_bin: str, serial: str, prop: str) -> str:
-    """Query a single read-only system property from an already authorized ADB device."""
+    """Query a single allow-listed read-only system property from an authorized ADB device."""
+    if prop not in _ALLOWED_PROPS:
+        return ""
     try:
-        res = subprocess.run(
+        res = subprocess.run(  # nosec B603
             [adb_bin, "-s", serial, "shell", "getprop", prop],
             capture_output=True,
             text=True,
@@ -84,7 +92,7 @@ def device_check() -> dict[str, Any]:
         }
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603
             [adb, "devices", "-l"],
             capture_output=True,
             text=True,
