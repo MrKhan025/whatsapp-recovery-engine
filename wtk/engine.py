@@ -1,22 +1,37 @@
-from pathlib import Path
-import json
-import shutil
-from .scanner import sha256_file, is_within, MEDIA_MIME
+"""Snapshot Comparison and Verified Export Engine (`wtk/engine.py`).
 
-def compare_snapshots(old: dict, new: dict) -> dict:
-    """Compare inventories by normalized relative path, size and hash."""
-    def indexed(snapshot):
+Preserves all v2.0 public functions (`compare_snapshots`, `load_snapshot`, `verified_export`)
+and adds multi-snapshot timeline comparison (`compare_multiple_snapshots`).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from .verification import verified_export
+
+
+def compare_snapshots(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    """Compare two scan inventories by normalized relative path, size, and SHA-256 hash."""
+    def indexed(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
         root = Path(snapshot["source"])
-        out = {}
+        out: dict[str, dict[str, Any]] = {}
         for entry in snapshot.get("entries", []):
             try:
                 rel = str(Path(entry["path"]).relative_to(root))
             except (ValueError, KeyError):
-                rel = entry.get("name", entry.get("path", "unknown"))
+                rel = entry.get("relative_path") or entry.get("name") or entry.get("path", "unknown")
             out[rel] = entry
         return out
+
     a, b = indexed(old), indexed(new)
-    added, removed, changed, unchanged = [], [], [], []
+    added: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[str] = []
+
     for key in sorted(a.keys() | b.keys()):
         if key not in a:
             added.append({"path": key, "new": b[key]})
@@ -26,47 +41,61 @@ def compare_snapshots(old: dict, new: dict) -> dict:
             changed.append({"path": key, "old": a[key], "new": b[key]})
         else:
             unchanged.append(key)
-    return {"added": added, "removed": removed, "changed": changed,
-            "unchanged": unchanged, "summary": {
-                "added": len(added), "removed": len(removed),
-                "changed": len(changed), "unchanged": len(unchanged)}}
 
-def load_snapshot(path: str | Path) -> dict:
+    return {
+        "old_source": old.get("source", ""),
+        "new_source": new.get("source", ""),
+        "old_timestamp": old.get("timestamp", ""),
+        "new_timestamp": new.get("timestamp", ""),
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "unchanged": unchanged,
+        "summary": {
+            "added": len(added),
+            "removed": len(removed),
+            "changed": len(changed),
+            "unchanged": len(unchanged),
+        },
+        "disclaimer": (
+            "Removed entries indicate files present in the earlier snapshot that were absent in the newer snapshot. "
+            "They are recoverable only if the earlier backup snapshot files are still accessible."
+        ),
+    }
+
+
+def compare_multiple_snapshots(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare two or more backup snapshots sequentially and compute net changes from first to last."""
+    if len(snapshots) < 2:
+        raise ValueError("At least two snapshots are required for comparison")
+
+    steps: list[dict[str, Any]] = []
+    for idx in range(len(snapshots) - 1):
+        diff = compare_snapshots(snapshots[idx], snapshots[idx + 1])
+        steps.append({
+            "step": idx + 1,
+            "from_source": snapshots[idx].get("source", f"snapshot_{idx}"),
+            "to_source": snapshots[idx + 1].get("source", f"snapshot_{idx + 1}"),
+            "summary": diff["summary"],
+            "added": diff["added"],
+            "removed": diff["removed"],
+            "changed": diff["changed"],
+        })
+
+    overall = compare_snapshots(snapshots[0], snapshots[-1])
+    return {
+        "snapshot_count": len(snapshots),
+        "steps": steps,
+        "net_comparison": overall,
+    }
+
+
+def load_snapshot(path: str | Path) -> dict[str, Any]:
+    """Load and validate a saved JSON scan snapshot."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list) or not data.get("source"):
         raise ValueError("Invalid scan snapshot")
     return data
 
-def verified_export(source_root: str | Path, file_paths: list[str], destination: str | Path) -> dict:
-    root = Path(source_root).expanduser().resolve()
-    dest = Path(destination).expanduser().resolve()
-    if dest == root or is_within(dest, root):
-        raise ValueError("Export destination must be outside the scanned source directory")
-    dest.mkdir(parents=True, exist_ok=True)
-    results = []
-    for raw in file_paths[:100]:
-        src = Path(raw).expanduser().resolve()
-        if not is_within(src, root) or src.is_symlink() or not src.is_file():
-            results.append({"source": raw, "verified": False, "error": "File is outside source or unavailable"})
-            continue
-        # Only media formats are eligible for this convenience export.
-        if src.suffix.lower() not in MEDIA_MIME and src.suffix.lower() not in {".heic", ".3gp", ".mkv"}:
-            results.append({"source": str(src), "verified": False, "error": "Unsupported export type"})
-            continue
-        target = dest / src.name
-        if target.exists():
-            results.append({"source": str(src), "verified": False, "error": "Destination already exists"})
-            continue
-        try:
-            before = sha256_file(src)
-            shutil.copyfile(src, target)
-            after = sha256_file(target)
-            ok = before == after
-            if not ok:
-                target.unlink(missing_ok=True)
-            results.append({"source": str(src), "destination": str(target), "source_sha256": before,
-                            "destination_sha256": after, "verified": ok})
-        except OSError as exc:
-            results.append({"source": str(src), "verified": False, "error": str(exc)[:160]})
-    return {"destination": str(dest), "results": results,
-            "verified_count": sum(x.get("verified", False) for x in results)}
+
+__all__ = ["compare_snapshots", "compare_multiple_snapshots", "load_snapshot", "verified_export"]

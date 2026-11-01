@@ -1,31 +1,100 @@
-import argparse, json
+"""Command-Line Interface (`wtk/cli.py`) for WhatsApp Recovery Engine – Advanced Edition."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
 from pathlib import Path
+
 import uvicorn
-from .scanner import scan_tree, inspect_sqlite
-from .reports import write_json, write_pdf
-from .engine import compare_snapshots, load_snapshot
-from .adb import device_check
 
-def main():
-    parser=argparse.ArgumentParser(prog="wtk",description="Offline WhatsApp backup/media diagnostics")
-    sub=parser.add_subparsers(dest="command",required=True)
-    s=sub.add_parser("scan"); s.add_argument("--source",required=True); s.add_argument("--output",default="./reports")
-    c=sub.add_parser("compare"); c.add_argument("old"); c.add_argument("new")
-    db=sub.add_parser("inspect-db"); db.add_argument("path")
-    sub.add_parser("adb-check")
-    srv=sub.add_parser("serve"); srv.add_argument("--host",default="127.0.0.1"); srv.add_argument("--port",type=int,default=8000)
-    a=parser.parse_args()
-    if a.command=="scan":
-        report=scan_tree(a.source); out=Path(a.output)
-        stamp=__import__("time").strftime("%Y%m%d-%H%M%S")
-        print(write_json(report,out,f"scan-{stamp}.json")); print(write_json(report,out)); print(write_pdf(report,out))
-        print(json.dumps({k:v for k,v in report.items() if k!="entries"},indent=2))
-    elif a.command=="compare":
-        print(json.dumps(compare_snapshots(load_snapshot(a.old),load_snapshot(a.new)),indent=2))
-    elif a.command=="inspect-db":
-        from .scanner import inspect_sqlite
-        print(json.dumps(inspect_sqlite(Path(a.path)),indent=2))
-    elif a.command=="adb-check": print(json.dumps(device_check(),indent=2))
-    elif a.command=="serve": uvicorn.run("wtk.api:app",host=a.host,port=a.port,reload=False)
+from .adb import device_check, get_android_guidance
+from .chat_analyzer import compare_chat_databases, inspect_chat_database, parse_chat_export
+from .engine import compare_snapshots, load_snapshot, verified_export
+from .reports import generate_all_scan_reports, write_json, write_verification_certificate
+from .scanner import inspect_sqlite, scan_tree
+from .security import audit_dependencies
 
-if __name__=="__main__": main()
+
+def main() -> None:
+    """Main CLI entry point for `python -m wtk`."""
+    parser = argparse.ArgumentParser(
+        prog="wtk",
+        description="WhatsApp Recovery Engine (v3.0) – Offline backup analysis, chat inspection, media discovery & SHA-256 verification",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    s = sub.add_parser("scan", help="Scan an accessible directory and generate forensic reports")
+    s.add_argument("--source", required=True, help="Directory to scan in read-only mode")
+    s.add_argument("--output", default="./reports", help="Output directory for generated reports")
+
+    c = sub.add_parser("compare", help="Compare two saved scan JSON snapshots")
+    c.add_argument("old", help="Older snapshot JSON path")
+    c.add_argument("new", help="Newer snapshot JSON path")
+
+    db = sub.add_parser("inspect-db", help="Inspect an accessible SQLite chat database in read-only mode")
+    db.add_argument("path", help="Path to SQLite database file")
+
+    db_cmp = sub.add_parser("compare-db", help="Compare two accessible SQLite chat database snapshots")
+    db_cmp.add_argument("old_db", help="Older SQLite database path")
+    db_cmp.add_argument("new_db", help="Newer SQLite database path")
+
+    exp = sub.add_parser("parse-export", help="Parse a TXT, JSON, or HTML chat export")
+    exp.add_argument("path", help="Path to chat export file")
+
+    ver = sub.add_parser("verify-export", help="Copy files safely and verify SHA-256 checksums")
+    ver.add_argument("--source", required=True, help="Source root directory")
+    ver.add_argument("--destination", required=True, help="Destination directory outside source")
+    ver.add_argument("files", nargs="+", help="Files to copy and verify")
+
+    sub.add_parser("adb-check", help="Check connected ADB devices and Android guidance")
+    sub.add_parser("security-audit", help="Run local security and dependency posture check")
+
+    srv = sub.add_parser("serve", help="Start the local responsive web dashboard")
+    srv.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    srv.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+
+    args = parser.parse_args()
+
+    if args.command == "scan":
+        report = scan_tree(args.source)
+        out = Path(args.output)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        snap_path = write_json(report, out, f"scan-{stamp}.json")
+        generated = generate_all_scan_reports(report, out)
+        print(f"Snapshot: {snap_path}")
+        for k, v in generated.items():
+            print(f"Report [{k}]: {v}")
+        summary = {k: v for k, v in report.items() if k not in ("entries", "chat_exports", "chat_databases")}
+        print(json.dumps(summary, indent=2))
+
+    elif args.command == "compare":
+        print(json.dumps(compare_snapshots(load_snapshot(args.old), load_snapshot(args.new)), indent=2))
+
+    elif args.command == "inspect-db":
+        print(json.dumps(inspect_chat_database(Path(args.path)), indent=2))
+
+    elif args.command == "compare-db":
+        print(json.dumps(compare_chat_databases(Path(args.old_db), Path(args.new_db)), indent=2))
+
+    elif args.command == "parse-export":
+        print(json.dumps(parse_chat_export(Path(args.path)), indent=2))
+
+    elif args.command == "verify-export":
+        res = verified_export(args.source, args.files, args.destination)
+        certs = write_verification_certificate(res, Path(args.destination))
+        print(json.dumps({**res, "certificates": {k: str(v) for k, v in certs.items()}}, indent=2))
+
+    elif args.command == "adb-check":
+        print(json.dumps(get_android_guidance(), indent=2))
+
+    elif args.command == "security-audit":
+        print(json.dumps(audit_dependencies(), indent=2))
+
+    elif args.command == "serve":
+        uvicorn.run("wtk.api:app", host=args.host, port=args.port, reload=False)
+
+
+if __name__ == "__main__":
+    main()
