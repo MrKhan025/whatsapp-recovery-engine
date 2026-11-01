@@ -5,6 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY wtk ./wtk
 COPY web ./web
+COPY sample-data ./sample-data
 RUN useradd --create-home --uid 10001 appuser
 USER appuser
 EXPOSE 8000

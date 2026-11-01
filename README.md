@@ -1,125 +1,108 @@
-# WhatsApp Recovery Engine
+# WhatsApp Recovery Engine – Advanced Edition (v3.0)
 
-**Suggested GitHub repository name:** `whatsapp-recovery-engine`
+**Repository:** `whatsapp-recovery-engine`
 
-A privacy-first, offline toolkit for inspecting user-owned WhatsApp backups and accessible media. Version 2.0 adds backup snapshot comparison, safe media previews, verified media export, and an upgraded dashboard.
+A professional, offline-first WhatsApp backup analysis, chat export inspection, media discovery, cryptographic SHA-256 verification, and forensic reporting platform supporting **Android, Windows, Linux, Termux, and ADB-connected Android devices**.
 
-> This is not an official WhatsApp product. It does not bypass WhatsApp encryption, Android sandboxing, account authentication, Google Drive access controls, or device permissions. It cannot guarantee recovery of deleted messages. It only works with files you own or are authorized to inspect.
+> **Ethical & Forensic Disclaimer:** This is not an official WhatsApp product. It operates strictly in **read-only mode** on user-owned, accessible files. It never bypasses WhatsApp encryption, never decrypts `.crypt*` backups without a legitimate user-owned key/restore flow, never bypasses OTPs/passwords/device locks or Android scoped-storage restrictions, and never claims guaranteed recovery of permanently deleted data.
 
-## v2.0 features
+## Core Capabilities (v3.0 Advanced Edition)
 
-- **Backup comparison:** save scan snapshots and compare two inventories to identify added, removed, changed, and unchanged files.
-- **Media preview:** view accessible image thumbnails and play supported browser media through a local-only preview endpoint.
-- **Verified export:** copy selected accessible media into a separate destination, then verify source and destination SHA-256 hashes.
-- **Advanced dashboard:** scan folders, view metrics, search inventory, compare snapshots, preview media, and verify exports.
-- **Offline-first:** no cloud upload, telemetry, WhatsApp login, OTP handling, or remote account access.
-- **Android / Termux:** scan accessible shared-storage folders.
-- **ADB diagnostics:** checks authorized device connection status only.
-- **PDF and JSON reports**, SQLite integrity checks, duplicate detection, Docker, tests, and GitHub Actions.
-- English, Hindi, and Urdu interface labels.
+### 1. Advanced Chat Recovery Assistant (`wtk/chat_analyzer.py`)
+- Detects accessible WhatsApp SQLite databases (`msgstore.db`, `wa.db`, `chatsettings.db`, `.sqlite`).
+- Identifies SQLite database formats and WhatsApp schema generations (`whatsapp_msgstore_modern`, `whatsapp_msgstore_legacy`, `whatsapp_wa_contacts`).
+- Runs strictly read-only integrity checks (`PRAGMA integrity_check` with `mode=ro&immutable=1` and `PRAGMA query_only=ON`).
+- Extracts database tables, column schemas, timestamps, and accessible message records.
+- Parses user-provided **TXT, JSON, and HTML** WhatsApp chat exports with keyword and sender search.
+- Compares two accessible SQLite database snapshots to identify **missing (historical), changed, and newly discovered** message records.
 
-## Requirements
+### 2. Advanced Media Recovery Engine (`wtk/media_engine.py`)
+- Organizes accessible media into **8 categories**: Photos, Videos, Voice Notes, Audio Files, Documents, Stickers, GIFs, and Thumbnails.
+- Performs magic-byte header validation to flag empty or corrupt media files where technically possible.
+- Supports filtering by category, file size, modification date, filename query, corruption status, and duplicate status.
+- Provides local-only inline browser previews for images, videos, and voice notes/audio files.
 
-- Python 3.10+
-- Optional: Android Platform Tools (`adb`) for device connection diagnostics
-- Optional: Docker for container deployment
+### 3. Smart Backup Analyzer (`wtk/backup_analyzer.py`)
+- Discovers `.crypt12`, `.crypt14`, `.crypt15`, and SQLite backups without decrypting encrypted archives.
+- Extracts file sizes, modification timestamps, embedded filename dates, and SHA-256 digests.
+- Flags empty (`0 B`) or suspiciously small backup files and generates a structured **Backup Health Report**.
+- Compares **two or more** backup snapshots chronologically to identify added, removed, changed, and unchanged files.
 
-## Install
+### 4. Recovery Success Estimator (`wtk/estimator.py`)
+- Evaluates accessible database availability, SQLite integrity, intact media counts, backup file health, corruption indicators, duplicate redundancy, and snapshot differences.
+- Outputs qualitative readiness (**Low / Medium / High**), supporting evidence, missing requirements, and recommended next steps — never presenting misleading "guaranteed recovery percentages".
 
+### 5. Modern Responsive Dashboard (`web/`)
+- 8 dedicated workspaces: **Overview, Chat Analyzer, Backup Analyzer, Media Recovery, Duplicate Finder, Recovery Verification, Recovery Reports, and Settings**.
+- Mobile-friendly responsive layout with **Dark and Light themes**.
+- Multi-language interface supporting **English, Hindi (हिन्दी), and Urdu (اردو with automatic RTL layout)**.
+
+### 6. Recovery Verification & Forensic Reporting (`wtk/verification.py`, `wtk/reports.py`)
+- Copies selected files to a separate destination outside the scanned source, computes **pre-copy and post-copy SHA-256 checksums**, prevents accidental overwriting, and issues a **Recovery Verification Certificate**.
+- Generates **7 forensic report formats**: PDF Report, JSON Scan Report, CSV File Inventory, Backup Comparison Report, Media Recovery Report, Database Health Report, and Recovery Verification Certificate (PDF & JSON).
+
+## Installation & Quick Start
+
+### Linux / macOS / Windows
 ```bash
-python -m venv .venv
-# Linux/macOS
+python3 -m venv .venv
+# Linux / macOS:
 source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
+# Windows PowerShell:
+# .venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
+python3 -m wtk serve --host 127.0.0.1 --port 8000
 ```
+Open `http://127.0.0.1:8000` in your browser.
 
-## Start the dashboard
-
+### Exact Termux (Android) Installation & Startup Commands
+Run the following commands inside Termux on Android:
 ```bash
-python -m wtk serve
-```
-
-Open `http://127.0.0.1:8000`.
-
-Keep the service on localhost. Do not expose it to the public internet.
-
-## Termux (Android)
-
-```bash
-pkg update && pkg upgrade
-pkg install python git
+pkg update -y && pkg upgrade -y
+pkg install -y python git libjpeg-turbo freetype
 termux-setup-storage
-git clone https://github.com/YOUR-USERNAME/whatsapp-recovery-engine.git
+git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
 cd whatsapp-recovery-engine
 pip install -r requirements-termux.txt
-python -m wtk serve
+python -m wtk serve --host 127.0.0.1 --port 8000
 ```
+Then open `http://127.0.0.1:8000` in your Android browser. Typical accessible shared-storage paths:
+- Android 11+: `/storage/emulated/0/Android/media/com.whatsapp/WhatsApp` (or `~/storage/shared/Android/media/com.whatsapp/WhatsApp`)
+- Android 10 & earlier: `/storage/emulated/0/WhatsApp`
 
-In the Android browser, open `http://127.0.0.1:8000`. Example accessible folder (paths vary):
-
-```text
-/data/data/com.termux/files/home/storage/shared/Android/media/com.whatsapp/WhatsApp
-```
-
-Android may restrict access to app-private data. Grant storage access only when needed.
-
-## CLI
-
+## Command-Line Interface (CLI)
 ```bash
-# Scan an accessible directory and save JSON/PDF report plus a snapshot
-python -m wtk scan --source ./sample-data --output ./reports
+# Scan an accessible folder and generate PDF, JSON, CSV, Media, and DB Health reports
+python3 -m wtk scan --source ./sample-data/snapshot_v2 --output ./reports
 
-# Compare two saved scan JSON files
-python -m wtk compare ./reports/scan-*.json ./reports/another-scan.json
+# Compare two saved scan snapshots
+python3 -m wtk compare ./reports/scan-old.json ./reports/scan-new.json
 
-# Verify SQLite integrity (only unencrypted SQLite files)
-python -m wtk inspect-db ./path/to/file.db
+# Inspect an unencrypted SQLite database in read-only mode
+python3 -m wtk inspect-db ./sample-data/snapshot_v2/Databases/msgstore.db
 
-# Check ADB connection state; does not pull files
-python -m wtk adb-check
+# Compare two accessible SQLite chat database snapshots at the record level
+python3 -m wtk compare-db ./sample-data/snapshot_v1/Databases/msgstore.db ./sample-data/snapshot_v2/Databases/msgstore.db
+
+# Parse a TXT, JSON, or HTML chat export
+python3 -m wtk parse-export ./sample-data/snapshot_v2/Exports/chat_export.json
+
+# Check ADB connection status and Android storage guidance
+python3 -m wtk adb-check
+
+# Run local security and dependency posture audit
+python3 -m wtk security-audit
 ```
 
-## v2 recovery workflow
-
-1. Scan an accessible WhatsApp media/backup folder.
-2. Save the resulting scan snapshot.
-3. Run another scan later and compare snapshots to identify changes.
-4. Preview accessible image/audio/video files from the dashboard.
-5. Select files and export them to a separate destination.
-6. Review the SHA-256 verification result and keep the report.
-
-**Removed from a later scan does not mean recoverable.** It only means a file was not present in that later inventory. It may have been moved, renamed, become inaccessible, or deleted.
-
-## Docker
-
-```bash
-docker compose up --build
-```
-
-Open `http://127.0.0.1:8000`. Docker publishes only to host loopback and runs as a non-root user. For host files, mount only the specific directory you intend to inspect. ADB is best run on the host.
-
-## Security model
-
-- Scanning and preview are read-only.
-- Export copies files; it never overwrites an existing destination file.
-- Export verification compares SHA-256 hashes after copying.
-- File preview is restricted to files in the latest scan and to supported media MIME types.
-- Symlinks are skipped during scanning and export.
-- No WhatsApp credentials, OTPs, tokens, or cloud account credentials are requested.
-- Reports may contain private filenames and local paths; protect them.
-
-## Tests
-
+## Running Automated Tests
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
 ```
 
-## Limitations
-
-- WhatsApp `.crypt*` backups are inventoried, not decrypted.
-- SQLite checks apply only to ordinary unencrypted SQLite databases.
-- Preview is for media that is already accessible as a file.
-- Export verifies copied bytes; it does not restore a file into WhatsApp.
-- Deleted chats/media may be permanently unrecoverable if no valid copy or backup exists.
+## Docker Deployment
+```bash
+docker compose up --build
+```
+Binds strictly to `127.0.0.1:8000` as a non-root container user with read-only root filesystem.
