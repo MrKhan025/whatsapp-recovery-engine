@@ -16,9 +16,11 @@ from .adb import device_check, get_android_guidance
 from .chat_analyzer import (
     compare_chat_databases,
     inspect_chat_database,
+    link_chat_media,
     parse_chat_export,
     search_chat_messages,
 )
+from .decryptor import decrypt_backup_with_user_key, inspect_crypt_header
 from .engine import compare_multiple_snapshots, compare_snapshots, verified_export
 from .estimator import estimate_recovery_readiness
 from .i18n import get_text
@@ -26,6 +28,7 @@ from .media_engine import MEDIA_MIME, filter_media_entries
 from .reports import (
     generate_all_scan_reports,
     write_backup_comparison_report,
+    write_forensic_bundle,
     write_json,
     write_verification_certificate,
 )
@@ -163,6 +166,7 @@ def compare(payload: dict[str, Any]) -> dict[str, Any]:
                 loaded.append(json.loads(p.read_text(encoding="utf-8")))
             multi_diff = compare_multiple_snapshots(loaded)
             write_backup_comparison_report(multi_diff["net_comparison"], REPORT_DIR)
+            write_forensic_bundle(REPORT_DIR)
             LAST_COMPARISON = multi_diff["net_comparison"]
             return multi_diff
 
@@ -177,9 +181,40 @@ def compare(payload: dict[str, Any]) -> dict[str, Any]:
         diff = compare_snapshots(old_data, new_data)
         diff["updated_readiness"] = estimate_recovery_readiness(new_data, snapshot_comparison=diff)
         write_backup_comparison_report(diff, REPORT_DIR)
+        write_forensic_bundle(REPORT_DIR)
         LAST_COMPARISON = diff
         return diff
     except (ValueError, OSError, json.JSONDecodeError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/backup/inspect-crypt")
+def api_inspect_crypt(payload: dict[str, Any]) -> dict[str, Any]:
+    """Inspect structural header metadata of an encrypted .crypt* backup without decrypting."""
+    raw_path = payload.get("path", "")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise HTTPException(400, "Encrypted backup path is required")
+    try:
+        target = validate_safe_path(raw_path, must_exist=True, allow_symlinks=False)
+        if not _check_within_allowed(target):
+            raise ValueError("Backup file must be inside the scanned directory or sample data")
+        return inspect_crypt_header(target)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/backup/decrypt-key")
+def api_decrypt_with_key(payload: dict[str, Any]) -> dict[str, Any]:
+    """Decrypt a user-owned .crypt* backup using a user-supplied 32-byte key (64 hex chars or 158B key file)."""
+    encrypted_path = payload.get("encrypted_path", "")
+    key_input = payload.get("key", "")
+    if not isinstance(encrypted_path, str) or not encrypted_path.strip() or not isinstance(key_input, str) or not key_input.strip():
+        raise HTTPException(400, "Both encrypted_path and user key are required")
+    try:
+        target = validate_safe_path(encrypted_path, must_exist=True, allow_symlinks=False)
+        out_db = REPORT_DIR / f"decrypted-{target.stem}.db"
+        return decrypt_backup_with_user_key(target, key_input.strip(), out_db)
+    except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -194,6 +229,22 @@ def api_inspect_db(payload: dict[str, Any]) -> dict[str, Any]:
         if not _check_within_allowed(target):
             raise ValueError("Database must be inside the scanned directory or sample data")
         return inspect_chat_database(target, sample_limit=200)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/chat/link-media")
+def api_link_chat_media(payload: dict[str, Any]) -> dict[str, Any]:
+    """Cross-reference SQLite message_media rows against scanned media files on disk."""
+    raw_path = payload.get("path", "")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise HTTPException(400, "Database path is required")
+    entries = LAST_REPORT.get("entries", []) if LAST_REPORT else []
+    try:
+        target = validate_safe_path(raw_path, must_exist=True, allow_symlinks=False)
+        if not _check_within_allowed(target):
+            raise ValueError("Database must be inside the scanned directory or sample data")
+        return link_chat_media(target, entries)
     except (ValueError, OSError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -325,6 +376,7 @@ def export(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Select media from the latest scan only")
         result = verified_export(LAST_REPORT["source"], paths, destination)
         write_verification_certificate(result, REPORT_DIR)
+        write_forensic_bundle(REPORT_DIR)
         LAST_VERIFICATION = result
         return result
     except (ValueError, OSError) as exc:
@@ -333,7 +385,7 @@ def export(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/report/{kind}")
 def download_report(kind: str) -> FileResponse:
-    """Download generated forensic reports (pdf, json, csv, media, db-health, comparison, certificate-json, certificate-pdf)."""
+    """Download generated forensic reports (pdf, json, csv, media, db-health, comparison, certificate-json, certificate-pdf, bundle)."""
     file_map = {
         "pdf": "recovery-report.pdf",
         "json": "recovery-scan.json",
@@ -343,9 +395,12 @@ def download_report(kind: str) -> FileResponse:
         "comparison": "backup-comparison-report.json",
         "certificate-json": "verification-certificate.json",
         "certificate-pdf": "verification-certificate.pdf",
+        "bundle": "forensic-evidence-bundle.zip",
     }
     if kind not in file_map:
         raise HTTPException(404, "Unknown report type")
+    if kind == "bundle" and LAST_REPORT is not None:
+        write_forensic_bundle(REPORT_DIR)
     path = REPORT_DIR / file_map[kind]
     if not path.exists():
         raise HTTPException(404, f"Report '{kind}' has not been generated yet. Run the corresponding scan, comparison, or verification first.")
