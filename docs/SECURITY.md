@@ -1,13 +1,10 @@
-# Security and privacy
+# Security and Privacy Policy
+
+See the root [`SECURITY.md`](../SECURITY.md) for the complete security architecture.
 
 - Use only data you own or are explicitly authorized to inspect.
-- API binds to localhost by default; Docker binds host port to 127.0.0.1.
-- Scanning and preview do not modify source files.
-- Preview is allow-listed to media paths from the latest scan and known media MIME types.
-- Export is limited to selected media files in the latest scan, refuses source-subdirectory destinations, does not overwrite, and verifies SHA-256 after copying.
-- Symbolic links are skipped.
-- ADB command is limited to `adb devices`; no `pull`, shell, root, package extraction, or private-data access.
-- No cloud sync, telemetry, account passwords, OTPs, tokens, or WhatsApp login.
-- Treat JSON/PDF reports as sensitive because they include filenames and full paths.
-
-Do not expose this dashboard to untrusted networks. Do not upload private backups to unknown services.
+- API binds to `127.0.0.1` by default; Docker publishes strictly to `127.0.0.1:8000`.
+- Scanning and preview are strictly read-only (`mode=ro&immutable=1` and `PRAGMA query_only = ON`).
+- Symbolic links and path traversal (`..`, null bytes) are blocked across all endpoints.
+- Export is limited to verified paths outside the source folder, never overwrites existing files, and verifies pre-copy and post-copy SHA-256 digests.
+- ADB diagnostics check only `adb devices -l` and read-only `getprop` on authorized devices; no rooting, exploit, or sandbox bypass is ever performed.
