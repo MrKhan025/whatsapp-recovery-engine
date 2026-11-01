@@ -1,6 +1,7 @@
 """Advanced Media Recovery Engine (`wtk/media_engine.py`).
 
-Detects, classifies, validates, filters, deduplicates, previews, and safely exports:
+Detects, classifies, validates, filters, deduplicates, reconstructs filename/EXIF
+timestamps, previews, and safely exports:
 - Photos
 - Videos
 - Voice notes
@@ -13,10 +14,10 @@ Detects, classifies, validates, filters, deduplicates, previews, and safely expo
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from .security import sha256_file
 
 MEDIA_MIME: dict[str, str] = {
     ".jpg": "image/jpeg",
@@ -62,6 +63,54 @@ MEDIA_CATEGORIES = (
     "thumbnails",
 )
 
+# Matches IMG-20261015-WA0001.jpg, VID-20261015-WA0001.mp4, PTT-20261001-WA0001.opus, or 2026-10-15
+_WA_FILENAME_DATE_RE = re.compile(
+    r"(?:IMG|VID|PTT|AUD|DOC|STK|GIF|thumb)?[-_\s]*(?P<y>20\d{2})[-_]?(\b|)(?P<m>0[1-9]|1[0-2])[-_]?(\b|)(?P<d>0[1-9]|[12]\d|3[01])",
+    re.IGNORECASE,
+)
+_EXIF_DATETIME_RE = re.compile(rb"(20\d{2}):(0[1-9]|1[0-2]):(0[1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):([0-5]\d):([0-5]\d)")
+
+
+def extract_media_timestamp_metadata(path: Path | str, stat_mtime: int | None = None) -> dict[str, Any]:
+    """Reconstruct original media date from WhatsApp filename patterns and embedded JPEG EXIF headers.
+
+    Detects when filesystem `mtime` drifted from the original embedded capture/filename date
+    (common after copying backups across phones or SD cards).
+    """
+    p = Path(path)
+    mtime = stat_mtime if stat_mtime is not None else (int(p.stat().st_mtime) if p.exists() else 0)
+    mtime_date = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d") if mtime > 0 else None
+
+    filename_date: str | None = None
+    m = _WA_FILENAME_DATE_RE.search(p.name)
+    if m:
+        filename_date = f"{m.group('y')}-{m.group('m')}-{m.group('d')}"
+
+    exif_datetime: str | None = None
+    if p.suffix.lower() in (".jpg", ".jpeg") and p.exists() and p.is_file():
+        try:
+            with p.open("rb") as f:
+                head = f.read(65536)
+            em = _EXIF_DATETIME_RE.search(head)
+            if em:
+                exif_datetime = (
+                    f"{em.group(1).decode()}-{em.group(2).decode()}-{em.group(3).decode()} "
+                    f"{em.group(4).decode()}:{em.group(5).decode()}:{em.group(6).decode()} UTC"
+                )
+        except OSError:
+            exif_datetime = None
+
+    reconstructed = exif_datetime[:10] if exif_datetime else filename_date
+    drift_detected = bool(reconstructed and mtime_date and reconstructed != mtime_date)
+
+    return {
+        "filename_date": filename_date,
+        "exif_datetime": exif_datetime,
+        "reconstructed_date": reconstructed or mtime_date,
+        "filesystem_date": mtime_date,
+        "timestamp_drift_detected": drift_detected,
+    }
+
 
 def classify_media_file(path: Path | str, size: int | None = None) -> str:
     """Classify a media file into one of the 8 WhatsApp media categories."""
@@ -71,7 +120,6 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
     parts_lower = [part.lower() for part in p.parts]
     joined_path = "/".join(parts_lower)
 
-    # 1. Thumbnails check (folder or filename indicator)
     if (
         any(part in (".thumbs", "thumbs", "thumbnails", ".thumbnails") for part in parts_lower)
         or name_lower.startswith("thumb")
@@ -79,11 +127,9 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
     ):
         return "thumbnails"
 
-    # 2. GIFs
     if suffix == ".gif" or "animated gifs" in joined_path or name_lower.startswith("gif-"):
         return "gifs"
 
-    # 3. Stickers
     if (
         "stickers" in joined_path
         or name_lower.startswith("stk-")
@@ -91,7 +137,6 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
     ):
         return "stickers"
 
-    # 4. Voice notes
     if (
         suffix == ".opus"
         or "voice notes" in joined_path
@@ -100,15 +145,12 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
     ):
         return "voice_notes"
 
-    # 5. Audio files
     if suffix in (".mp3", ".m4a", ".aac", ".ogg", ".wav") or "whatsapp audio" in joined_path or name_lower.startswith("aud-"):
         return "audio"
 
-    # 6. Videos
     if suffix in (".mp4", ".webm", ".mov", ".3gp", ".mkv") or "whatsapp video" in joined_path or name_lower.startswith("vid-"):
         return "videos"
 
-    # 7. Documents
     if (
         suffix in (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".zip")
         or "whatsapp documents" in joined_path
@@ -116,7 +158,6 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
     ):
         return "documents"
 
-    # 8. Photos
     if suffix in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic") or "whatsapp images" in joined_path or name_lower.startswith("img-"):
         return "photos"
 
@@ -124,10 +165,7 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
 
 
 def inspect_media_integrity(path: Path | str) -> dict[str, Any]:
-    """Check whether a media file is empty, truncated, or has a mismatched magic header.
-
-    Note: Checks structural headers where technically possible without full codec decoding.
-    """
+    """Check whether a media file is empty, truncated, or has a mismatched magic header."""
     p = Path(path)
     suffix = p.suffix.lower()
     try:
@@ -139,8 +177,6 @@ def inspect_media_integrity(path: Path | str) -> dict[str, Any]:
     except OSError as exc:
         return {"corrupt": True, "header_valid": False, "reason": f"Unreadable file: {exc}"}
 
-    # Check well-known magic byte signatures when file size >= 16 bytes
-    # Note: Small synthetic test fixtures (< 16 bytes) without magic headers are flagged with a soft notice
     if suffix in (".jpg", ".jpeg"):
         if header.startswith(b"\xff\xd8\xff"):
             return {"corrupt": False, "header_valid": True, "reason": None}
