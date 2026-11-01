@@ -1,1 +1,15 @@
-
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WhatsApp Recovery Engine</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="shell">
+<header><div><p class="eyebrow">VERSION 2.0 • LOCAL • OFFLINE • PRIVACY FIRST</p><h1 id="title">WhatsApp Recovery Engine</h1><p>Compare backups, preview accessible media, and verify exported copies.</p></div><select id="lang" aria-label="Language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="ur">اردو</option></select></header>
+<div class="notice">Only scan files you own or are authorized to inspect. Encrypted WhatsApp backups are not decrypted. Missing files are not necessarily recoverable.</div>
+<section class="panel"><div class="section-head"><div><h2>1. Scan your folder</h2><p>Read-only inventory. Source files are not changed.</p></div><span class="pill">READ ONLY</span></div><form id="scan"><input id="source" required placeholder="/path/to/WhatsApp folder" aria-label="Folder path"><button>Scan folder</button></form><p id="message" role="status"></p></section>
+<section id="results" hidden>
+<div class="stats"><article><b id="files">0</b><span>Files scanned</span></article><article><b id="media">0</b><span>Media items</span></article><article><b id="backups">0</b><span>Backup candidates</span></article><article><b id="dupes">0</b><span>Duplicate groups</span></article></div>
+<section class="panel"><div class="section-head"><div><h2>2. Media inventory</h2><p>Search, preview and select supported media for verified export.</p></div><input id="filter" placeholder="Filter filenames…" aria-label="Filter filenames"></div><div class="table-wrap"><table><thead><tr><th>Select</th><th>Type</th><th>Filename</th><th>Size</th><th>SHA-256</th><th>Preview</th></tr></thead><tbody id="entries"></tbody></table></div>
+<div class="export"><input id="destination" placeholder="/path/to/safe-export-folder" aria-label="Export destination"><button id="export">Export selected & verify</button></div><p id="exportmsg" role="status"></p></section>
+<section class="panel"><div class="section-head"><div><h2>3. Backup comparison</h2><p>Compare saved scan snapshots. Removed means absent from the newer inventory, not necessarily deleted.</p></div></div><div class="compare"><select id="old"></select><select id="new"></select><button id="compare">Compare snapshots</button></div><div id="comparison"></div></section>
+<section class="panel"><div class="section-head"><h2>4. Reports</h2><div><a href="/api/report/json">Download JSON</a> · <a href="/api/report/pdf">Download PDF</a></div></div></section>
+</section>
+<section id="preview" class="panel" hidden><div class="section-head"><h2>Media preview</h2><button id="closePreview" class="secondary">Close</button></div><div id="previewBody"></div></section>
+<footer><strong>Privacy:</strong> local processing, no cloud upload, no OTPs, no account login, no decryption, no permission bypass.</footer>
+</main><script src="/app.js"></script></body></html>
