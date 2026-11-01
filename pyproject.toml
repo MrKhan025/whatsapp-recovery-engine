@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whatsapp-recovery-engine"
+version = "2.0.0"
+description = "Offline-first backup comparison, media preview and verified export toolkit"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.110,<1.0", "uvicorn>=0.27,<1.0", "reportlab>=4.0,<5.0"]
+
+[project.scripts]
+wtk = "wtk.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
