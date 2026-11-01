@@ -1,15 +1,478 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WhatsApp Recovery Engine</title><link rel="stylesheet" href="/style.css"></head>
-<body><main class="shell">
-<header><div><p class="eyebrow">VERSION 2.0 • LOCAL • OFFLINE • PRIVACY FIRST</p><h1 id="title">WhatsApp Recovery Engine</h1><p>Compare backups, preview accessible media, and verify exported copies.</p></div><select id="lang" aria-label="Language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="ur">اردو</option></select></header>
-<div class="notice">Only scan files you own or are authorized to inspect. Encrypted WhatsApp backups are not decrypted. Missing files are not necessarily recoverable.</div>
-<section class="panel"><div class="section-head"><div><h2>1. Scan your folder</h2><p>Read-only inventory. Source files are not changed.</p></div><span class="pill">READ ONLY</span></div><form id="scan"><input id="source" required placeholder="/path/to/WhatsApp folder" aria-label="Folder path"><button>Scan folder</button></form><p id="message" role="status"></p></section>
-<section id="results" hidden>
-<div class="stats"><article><b id="files">0</b><span>Files scanned</span></article><article><b id="media">0</b><span>Media items</span></article><article><b id="backups">0</b><span>Backup candidates</span></article><article><b id="dupes">0</b><span>Duplicate groups</span></article></div>
-<section class="panel"><div class="section-head"><div><h2>2. Media inventory</h2><p>Search, preview and select supported media for verified export.</p></div><input id="filter" placeholder="Filter filenames…" aria-label="Filter filenames"></div><div class="table-wrap"><table><thead><tr><th>Select</th><th>Type</th><th>Filename</th><th>Size</th><th>SHA-256</th><th>Preview</th></tr></thead><tbody id="entries"></tbody></table></div>
-<div class="export"><input id="destination" placeholder="/path/to/safe-export-folder" aria-label="Export destination"><button id="export">Export selected & verify</button></div><p id="exportmsg" role="status"></p></section>
-<section class="panel"><div class="section-head"><div><h2>3. Backup comparison</h2><p>Compare saved scan snapshots. Removed means absent from the newer inventory, not necessarily deleted.</p></div></div><div class="compare"><select id="old"></select><select id="new"></select><button id="compare">Compare snapshots</button></div><div id="comparison"></div></section>
-<section class="panel"><div class="section-head"><h2>4. Reports</h2><div><a href="/api/report/json">Download JSON</a> · <a href="/api/report/pdf">Download PDF</a></div></div></section>
-</section>
-<section id="preview" class="panel" hidden><div class="section-head"><h2>Media preview</h2><button id="closePreview" class="secondary">Close</button></div><div id="previewBody"></div></section>
-<footer><strong>Privacy:</strong> local processing, no cloud upload, no OTPs, no account login, no decryption, no permission bypass.</footer>
-</main><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en" data-theme="dark" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WhatsApp Recovery Engine – Advanced Edition</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar / Responsive Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">WRE v3.0</div>
+        <div>
+          <strong id="sidebarTitle">Recovery Engine</strong>
+          <small>Offline Forensic Suite</small>
+        </div>
+      </div>
+
+      <nav class="nav-menu" aria-label="Main Dashboard Navigation">
+        <button class="nav-btn active" data-tab="overview" id="nav-overview">
+          <span class="nav-icon">◈</span> <span class="nav-label">Overview</span>
+        </button>
+        <button class="nav-btn" data-tab="chat" id="nav-chat">
+          <span class="nav-icon">💬</span> <span class="nav-label">Chat Analyzer</span>
+        </button>
+        <button class="nav-btn" data-tab="backup" id="nav-backup">
+          <span class="nav-icon">🗄️</span> <span class="nav-label">Backup Analyzer</span>
+        </button>
+        <button class="nav-btn" data-tab="media" id="nav-media">
+          <span class="nav-icon">🖼️</span> <span class="nav-label">Media Recovery</span>
+        </button>
+        <button class="nav-btn" data-tab="duplicates" id="nav-duplicates">
+          <span class="nav-icon">⧉</span> <span class="nav-label">Duplicate Finder</span>
+        </button>
+        <button class="nav-btn" data-tab="verify" id="nav-verify">
+          <span class="nav-icon">✓</span> <span class="nav-label">Recovery Verification</span>
+        </button>
+        <button class="nav-btn" data-tab="reports" id="nav-reports">
+          <span class="nav-icon">📄</span> <span class="nav-label">Recovery Reports</span>
+        </button>
+        <button class="nav-btn" data-tab="settings" id="nav-settings">
+          <span class="nav-icon">⚙️</span> <span class="nav-label">Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <span class="pill pill-green">100% LOCAL &amp; READ-ONLY</span>
+        <p id="privacyNote">Files stay on this device. No cloud upload or telemetry.</p>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Header Bar -->
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">VERSION 3.0 • OFFLINE-FIRST • FORENSIC &amp; RECOVERY SUITE</p>
+          <h1 id="title">WhatsApp Recovery Engine</h1>
+          <p id="subtitle" class="subtitle-text">Offline-First Backup Analysis, Chat Inspection, Media Discovery &amp; SHA-256 Verification</p>
+        </div>
+        <div class="topbar-actions">
+          <button id="themeToggle" class="secondary-btn" type="button" title="Toggle Dark/Light Theme">🌗 Theme</button>
+          <select id="lang" aria-label="Language">
+            <option value="en">English</option>
+            <option value="hi">हिन्दी (Hindi)</option>
+            <option value="ur">اردو (Urdu)</option>
+          </select>
+        </div>
+      </header>
+
+      <!-- Ethical & Technical Notice -->
+      <div class="notice" id="disclaimerBanner">
+        <strong>Forensic Integrity Notice:</strong> Only scan files you own or are authorized to inspect. Encrypted WhatsApp <code>.crypt*</code> backups are cataloged without decryption. Deleted messages cannot be recovered unless present in an accessible database, export, or backup snapshot.
+      </div>
+
+      <!-- Notification & Progress Bar -->
+      <div id="alertBox" class="alert-box" hidden role="alert"></div>
+      <div id="progressWrap" class="progress-wrap" hidden>
+        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+        <span id="progressText" class="progress-label">Processing…</span>
+      </div>
+
+      <!-- Global Quick Scan Panel -->
+      <section class="panel scan-bar-panel">
+        <div class="section-head">
+          <div>
+            <h2>Scan Authorized Directory</h2>
+            <p>Read-only inventory of SQLite chat DBs, <code>.crypt*</code> backups, chat exports, and media across 8 categories.</p>
+          </div>
+          <div class="quick-actions">
+            <button type="button" id="loadSampleV2" class="secondary-btn">Load Sample Snapshot (v2)</button>
+            <button type="button" id="loadSampleV1" class="secondary-btn">Load Earlier Snapshot (v1)</button>
+          </div>
+        </div>
+        <form id="scanForm" class="scan-form">
+          <input id="source" required placeholder="/path/to/WhatsApp or ./sample-data/snapshot_v2" aria-label="Folder path">
+          <button type="submit" id="scanBtn">Scan Folder</button>
+        </form>
+        <p id="message" class="status-msg" role="status"></p>
+      </section>
+
+      <!-- TAB 1: OVERVIEW -->
+      <section id="tab-overview" class="tab-view active">
+        <div class="stats">
+          <article class="stat-card">
+            <b id="files">0</b>
+            <span id="lbl-files">Files Scanned</span>
+          </article>
+          <article class="stat-card">
+            <b id="media">0</b>
+            <span id="lbl-media">Accessible Media</span>
+          </article>
+          <article class="stat-card">
+            <b id="backups">0</b>
+            <span id="lbl-backups">Backup Candidates</span>
+          </article>
+          <article class="stat-card">
+            <b id="dupes">0</b>
+            <span id="lbl-dupes">Duplicate Groups</span>
+          </article>
+        </div>
+
+        <!-- Recovery Success Estimator -->
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2 id="readinessTitle">Recovery Readiness Assessment</h2>
+              <p>Qualitative evaluation based on accessible databases, SQLite integrity, media health, corruption indicators, and snapshots (never a guaranteed percentage).</p>
+            </div>
+            <span id="readinessBadge" class="readiness-badge readiness-low">Not Scanned</span>
+          </div>
+          <div class="grid-3">
+            <div class="subcard">
+              <h3>Supporting Evidence</h3>
+              <ul id="estEvidence" class="clean-list"><li>Run a directory scan to evaluate recovery readiness.</li></ul>
+            </div>
+            <div class="subcard">
+              <h3>Missing Requirements &amp; Barriers</h3>
+              <ul id="estMissing" class="clean-list"><li>No scan performed yet.</li></ul>
+            </div>
+            <div class="subcard">
+              <h3>Recommended Next Steps</h3>
+              <ul id="estSteps" class="clean-list"><li>Enter an accessible folder path above or load the sample data.</li></ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Category Breakdown & Scan History -->
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Media Category Breakdown</h2>
+            <div id="categoryGrid" class="category-grid">
+              <div class="cat-chip"><span>Photos</span><b id="cat-photos">0</b></div>
+              <div class="cat-chip"><span>Videos</span><b id="cat-videos">0</b></div>
+              <div class="cat-chip"><span>Voice Notes</span><b id="cat-voice_notes">0</b></div>
+              <div class="cat-chip"><span>Audio</span><b id="cat-audio">0</b></div>
+              <div class="cat-chip"><span>Documents</span><b id="cat-documents">0</b></div>
+              <div class="cat-chip"><span>Stickers</span><b id="cat-stickers">0</b></div>
+              <div class="cat-chip"><span>GIFs</span><b id="cat-gifs">0</b></div>
+              <div class="cat-chip"><span>Thumbnails</span><b id="cat-thumbnails">0</b></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Scan History</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Timestamp</th><th>Source</th><th>Files</th><th>Media</th><th>Readiness</th></tr>
+                </thead>
+                <tbody id="historyBody">
+                  <tr><td colspan="5" class="empty">No scans recorded in this session yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: CHAT ANALYZER -->
+      <section id="tab-chat" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Accessible SQLite Chat Databases</h2>
+              <p>Read-only <code>PRAGMA integrity_check</code>, schema detection, tables, timestamps, and record counts.</p>
+            </div>
+            <span class="pill">QUERY_ONLY = ON</span>
+          </div>
+          <div id="chatDbList" class="db-cards-wrap">
+            <p class="empty">Scan a folder containing an accessible SQLite database (such as <code>msgstore.db</code> or <code>wa.db</code>) to inspect tables and schemas.</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Searchable Chat Export &amp; Database Message Preview</h2>
+              <p>Inspect accessible SQLite message rows and TXT, JSON, or HTML chat exports.</p>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input id="chatSearchQuery" placeholder="Search message text or keyword…" aria-label="Search chat messages">
+            <input id="chatSearchSender" placeholder="Filter by sender / participant…" aria-label="Filter by sender">
+            <button type="button" id="chatSearchBtn">Search Messages</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Timestamp</th><th>Sender</th><th>Message Preview</th><th>Record SHA-256</th></tr>
+              </thead>
+              <tbody id="chatMessagesBody">
+                <tr><td colspan="5" class="empty">Run a scan or search to preview accessible messages.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>SQLite Chat Database Snapshot Comparison</h2>
+              <p>Compare two accessible SQLite database snapshots to identify missing (historical), modified, and newly discovered message records.</p>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input id="oldDbPath" placeholder="/path/to/older/msgstore.db" aria-label="Older SQLite DB path">
+            <input id="newDbPath" placeholder="/path/to/newer/msgstore.db" aria-label="Newer SQLite DB path">
+            <button type="button" id="compareDbBtn">Compare Databases</button>
+          </div>
+          <div id="dbCompareOutput" class="comparison-output"></div>
+        </div>
+      </section>
+
+      <!-- TAB 3: BACKUP ANALYZER -->
+      <section id="tab-backup" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Backup Health &amp; Encrypted <code>.crypt*</code> Inventory</h2>
+              <p>Identifies <code>.crypt12</code>, <code>.crypt14</code>, <code>.crypt15</code>, and SQLite backups without decrypting encrypted archives, and flags empty or suspiciously small files.</p>
+            </div>
+            <span id="backupHealthBadge" class="pill">Status: Unknown</span>
+          </div>
+          <div id="backupWarningsBox"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Filename</th><th>Format</th><th>Size</th><th>Modified (UTC)</th><th>Status</th><th>SHA-256 Checksum</th></tr>
+              </thead>
+              <tbody id="backupTableBody">
+                <tr><td colspan="6" class="empty">Scan a directory to inspect backup files.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Multi-Snapshot Backup Comparison</h2>
+              <p>Compare two saved scan snapshots to identify added, removed, changed, and unchanged files.</p>
+            </div>
+          </div>
+          <div class="compare-controls">
+            <select id="old" aria-label="Older Snapshot"></select>
+            <select id="new" aria-label="Newer Snapshot"></select>
+            <button type="button" id="compare">Compare Snapshots</button>
+          </div>
+          <div id="comparison" class="comparison-output"></div>
+        </div>
+      </section>
+
+      <!-- TAB 4: MEDIA RECOVERY -->
+      <section id="tab-media" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Advanced Media Discovery &amp; Preview</h2>
+              <p>Filter by category, byte size, filename, or corruption status. Preview images, videos, and voice/audio files inline.</p>
+            </div>
+            <div>
+              <button type="button" id="selectAllMediaBtn" class="secondary-btn">Select All Visible</button>
+              <button type="button" id="clearMediaSelectionBtn" class="secondary-btn">Clear Selection</button>
+            </div>
+          </div>
+
+          <div class="filter-bar">
+            <select id="mediaCategoryFilter" aria-label="Media Category">
+              <option value="all">All Categories (8)</option>
+              <option value="photos">Photos</option>
+              <option value="videos">Videos</option>
+              <option value="voice_notes">Voice Notes</option>
+              <option value="audio">Audio Files</option>
+              <option value="documents">Documents</option>
+              <option value="stickers">Stickers</option>
+              <option value="gifs">GIFs</option>
+              <option value="thumbnails">Thumbnails</option>
+            </select>
+            <input id="filter" placeholder="Search filename…" aria-label="Filter filenames">
+            <input id="minSizeFilter" type="number" min="0" placeholder="Min bytes" aria-label="Minimum size in bytes">
+            <input id="maxSizeFilter" type="number" min="0" placeholder="Max bytes" aria-label="Maximum size in bytes">
+            <label class="checkbox-label">
+              <input type="checkbox" id="onlyCorruptFilter"> Corrupt Only
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Category</th>
+                  <th>Filename</th>
+                  <th>Size</th>
+                  <th>Integrity</th>
+                  <th>SHA-256</th>
+                  <th>Preview</th>
+                </tr>
+              </thead>
+              <tbody id="entries">
+                <tr><td colspan="7" class="empty">Run a scan to populate the media inventory.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <section id="preview" class="panel" hidden>
+          <div class="section-head">
+            <h2>Inline Media Preview</h2>
+            <button id="closePreview" class="secondary-btn" type="button">Close Preview</button>
+          </div>
+          <div id="previewBody" class="preview-container"></div>
+        </section>
+      </section>
+
+      <!-- TAB 5: DUPLICATE FINDER -->
+      <section id="tab-duplicates" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>SHA-256 Duplicate Media Finder</h2>
+              <p>Exact cryptographic byte-for-byte duplicate detection using SHA-256 digests.</p>
+            </div>
+            <span id="wastedBytesBadge" class="pill">Reclaimable: 0 B</span>
+          </div>
+          <div id="duplicateGroupsContainer">
+            <p class="empty">Run a scan to detect duplicate files across folders.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: RECOVERY VERIFICATION -->
+      <section id="tab-verify" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Safe Export &amp; Pre/Post-Copy SHA-256 Verification</h2>
+              <p>Copies selected media to a separate directory outside the source, calculates SHA-256 before and after copying, prevents overwriting, and issues a Verification Certificate.</p>
+            </div>
+            <span class="pill pill-green">NO OVERWRITE</span>
+          </div>
+          <div class="export-controls">
+            <input id="destination" placeholder="/tmp/whatsapp-verified-export" aria-label="Export destination folder">
+            <button id="export" type="button">Export Selected &amp; Verify SHA-256</button>
+          </div>
+          <p id="exportmsg" class="status-msg" role="status"></p>
+
+          <div id="verificationCertBox" hidden class="subcard cert-card">
+            <h3>Verification Certificate Issued</h3>
+            <p id="certMeta"></p>
+            <div class="report-btn-row">
+              <a class="btn-link" href="/api/report/certificate-pdf" target="_blank">Download Certificate (PDF)</a>
+              <a class="btn-link secondary-link" href="/api/report/certificate-json" target="_blank">Download Certificate (JSON)</a>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>File</th><th>Pre-Copy SHA-256</th><th>Post-Copy SHA-256</th><th>Status</th></tr>
+              </thead>
+              <tbody id="verificationTableBody">
+                <tr><td colspan="4" class="empty">Select media in the Media Recovery tab and click "Export Selected &amp; Verify SHA-256".</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 7: RECOVERY REPORTS -->
+      <section id="tab-reports" class="tab-view" hidden>
+        <div class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Forensic &amp; Recovery Reports</h2>
+              <p>All reports contain UTC timestamps, file counts, SHA-256 checksums, warnings, and explicit technical limitations.</p>
+            </div>
+          </div>
+          <div class="reports-grid">
+            <article class="report-card">
+              <h3>1. Comprehensive Forensic PDF Report</h3>
+              <p>Executive summary, recovery readiness, backup health, category counts, and SHA-256 file inventory.</p>
+              <a class="btn-link" href="/api/report/pdf" target="_blank">Download PDF Report</a>
+            </article>
+            <article class="report-card">
+              <h3>2. Full JSON Scan Inventory</h3>
+              <p>Complete machine-readable JSON snapshot with SQLite schemas, hashes, and readiness metadata.</p>
+              <a class="btn-link" href="/api/report/json" target="_blank">Download JSON Report</a>
+            </article>
+            <article class="report-card">
+              <h3>3. CSV File Inventory</h3>
+              <p>Spreadsheet-compatible CSV listing every scanned file, category, size, timestamp, SHA-256, and corruption flag.</p>
+              <a class="btn-link" href="/api/report/csv" target="_blank">Download CSV Inventory</a>
+            </article>
+            <article class="report-card">
+              <h3>4. Backup Comparison Report</h3>
+              <p>Detailed diff report of added, removed, changed, and unchanged files between backup snapshots.</p>
+              <a class="btn-link" href="/api/report/comparison" target="_blank">Download Comparison Report</a>
+            </article>
+            <article class="report-card">
+              <h3>5. Media Recovery Report</h3>
+              <p>Category breakdown across Photos, Videos, Voice Notes, Audio, Docs, Stickers, GIFs, Thumbnails, and corrupt headers.</p>
+              <a class="btn-link" href="/api/report/media" target="_blank">Download Media Report</a>
+            </article>
+            <article class="report-card">
+              <h3>6. Database Health Report</h3>
+              <p>SQLite <code>PRAGMA integrity_check</code> results, table row counts, encrypted <code>.crypt*</code> inventory, and anomaly warnings.</p>
+              <a class="btn-link" href="/api/report/db-health" target="_blank">Download DB Health Report</a>
+            </article>
+            <article class="report-card">
+              <h3>7. Recovery Verification Certificate</h3>
+              <p>Cryptographic pre-copy and post-copy SHA-256 attestation certificate (PDF &amp; JSON).</p>
+              <div class="report-btn-row">
+                <a class="btn-link" href="/api/report/certificate-pdf" target="_blank">Certificate PDF</a>
+                <a class="btn-link secondary-link" href="/api/report/certificate-json" target="_blank">Certificate JSON</a>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 8: SETTINGS & ANDROID/TERMUX DIAGNOSTICS -->
+      <section id="tab-settings" class="tab-view" hidden>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Android, Termux &amp; ADB Diagnostics</h2>
+            <p>Read-only connection check for authorized ADB devices and Android scoped-storage guidance.</p>
+            <button type="button" id="refreshAdbBtn" class="secondary-btn">Refresh ADB Diagnostics</button>
+            <div id="adbStatusBox" class="subcard" style="margin-top:14px;"></div>
+            <h3 style="margin-top:18px;">Termux Setup &amp; Startup Commands</h3>
+            <pre id="termuxCommandsPre" class="code-block">pkg update -y &amp;&amp; pkg upgrade -y
+pkg install -y python git libjpeg-turbo freetype
+termux-setup-storage
+git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
+cd whatsapp-recovery-engine
+pip install -r requirements-termux.txt
+python -m wtk serve --host 127.0.0.1 --port 8000</pre>
+          </div>
+
+          <div class="panel">
+            <h2>Security, Privacy &amp; Dependency Posture</h2>
+            <p>Local-only defaults, path traversal &amp; symlink protection, and dependency version bounds.</p>
+            <div id="securityAuditBox" class="subcard"></div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="app-footer">
+        <strong>Security &amp; Privacy Guarantee:</strong> 100% local processing • Read-only source scanning • SHA-256 verified exports • No telemetry • No cloud uploads • No encryption or permission bypass.
+      </footer>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
