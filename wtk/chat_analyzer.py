@@ -28,15 +28,12 @@ from .security import open_sqlite_readonly, sanitize_search_query, sha256_file, 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# Regex patterns for standard WhatsApp TXT chat exports across Android and iOS locales
 _TXT_PATTERNS = [
-    # Android format: 12/05/2025, 14:32 - Sender Name: Message text
     re.compile(
         r"^(?P<date>\d{1,4}[/\-\.]\d{1,2}[/\-\.]\d{1,4}),?\s+"
         r"(?P<time>\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?)\s*-\s*"
         r"(?:(?P<sender>[^:]{1,80}):\s*)?(?P<text>.*)$"
     ),
-    # iOS / Bracketed format: [12/05/25, 14:32:10] Sender Name: Message text
     re.compile(
         r"^\[(?P<date>\d{1,4}[/\-\.]\d{1,2}[/\-\.]\d{1,4}),?\s+"
         r"(?P<time>\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?)\]\s*"
@@ -168,15 +165,17 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
                 table_names.append(tname)
                 quoted_tname = _quote_ident(tname)
                 try:
-                    cnt_row = conn.execute(f"SELECT COUNT(*) FROM {quoted_tname};").fetchone()  # nosec B608
+                    count_sql = f"SELECT COUNT(*) FROM {quoted_tname};"  # nosec
+                    cnt_row = conn.execute(count_sql).fetchone()
                     row_count = int(cnt_row[0]) if cnt_row else 0
                 except sqlite3.DatabaseError:
                     row_count = 0
                 total_records += row_count
 
-                cols_info = []
+                cols_info: list[dict[str, Any]] = []
                 try:
-                    for col in conn.execute(f"PRAGMA table_info({quoted_tname});").fetchall():  # nosec B608
+                    pragma_sql = f"PRAGMA table_info({quoted_tname});"  # nosec
+                    for col in conn.execute(pragma_sql).fetchall():
                         cols_info.append({
                             "name": str(col["name"]),
                             "type": str(col["type"] or "ANY"),
@@ -184,7 +183,7 @@ def inspect_chat_database(path: Path | str, sample_limit: int = 50) -> dict[str,
                             "pk": bool(col["pk"]),
                         })
                 except sqlite3.DatabaseError:
-                    pass
+                    cols_info = []
 
                 schemas[tname] = {
                     "row_count": row_count,
@@ -289,14 +288,13 @@ def _extract_messages_from_conn(
     if ts_col:
         quoted_ts = _quote_ident(ts_col)
         try:
-            bounds = conn.execute(  # nosec B608
-                f"SELECT MIN({quoted_ts}), MAX({quoted_ts}) FROM {quoted_table} WHERE {quoted_ts} IS NOT NULL AND {quoted_ts} != 0;"
-            ).fetchone()
+            bounds_sql = f"SELECT MIN({quoted_ts}), MAX({quoted_ts}) FROM {quoted_table} WHERE {quoted_ts} IS NOT NULL AND {quoted_ts} != 0;"  # nosec
+            bounds = conn.execute(bounds_sql).fetchone()
             if bounds:
                 min_ts_str = _normalize_timestamp(bounds[0])
                 max_ts_str = _normalize_timestamp(bounds[1])
         except sqlite3.DatabaseError:
-            pass
+            min_ts_str = None
 
     select_exprs = []
     select_exprs.append(f"{_quote_ident(id_col)} AS msg_id" if id_col else "rowid AS msg_id")
@@ -306,7 +304,8 @@ def _extract_messages_from_conn(
     select_exprs.append(f"{_quote_ident(from_me_col)} AS from_me" if from_me_col else "0 AS from_me")
 
     order_clause = f"ORDER BY {_quote_ident(ts_col)} ASC" if ts_col else "ORDER BY msg_id ASC"
-    query = f'SELECT {", ".join(select_exprs)} FROM {quoted_table} {order_clause} LIMIT ?;'  # nosec B608
+    cols_joined = ", ".join(select_exprs)
+    query = f"SELECT {cols_joined} FROM {quoted_table} {order_clause} LIMIT ?;"  # nosec
 
     messages: list[dict[str, Any]] = []
     try:
@@ -329,7 +328,7 @@ def _extract_messages_from_conn(
                 "sha256": record_hash,
             })
     except sqlite3.DatabaseError:
-        pass
+        messages = []
 
     return messages, min_ts_str, max_ts_str, total_count
 

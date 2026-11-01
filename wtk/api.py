@@ -56,7 +56,7 @@ def _allowed_roots() -> list[Path]:
         try:
             roots.append(Path(LAST_REPORT["source"]).resolve())
         except OSError:
-            pass
+            return roots
     return roots
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
-import subprocess  # nosec B404
+import subprocess  # nosec
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,7 @@ def _query_authorized_prop(adb_bin: str, serial: str, prop: str) -> str:
     if prop not in _ALLOWED_PROPS:
         return ""
     try:
-        res = subprocess.run(  # nosec B603
+        res = subprocess.run(  # nosec
             [adb_bin, "-s", serial, "shell", "getprop", prop],
             capture_output=True,
             text=True,
@@ -65,7 +65,7 @@ def _query_authorized_prop(adb_bin: str, serial: str, prop: str) -> str:
         if res.returncode == 0:
             return res.stdout.strip()[:80]
     except (OSError, subprocess.TimeoutExpired):
-        pass
+        return ""
     return ""
 
 
@@ -92,7 +92,7 @@ def device_check() -> dict[str, Any]:
         }
 
     try:
-        result = subprocess.run(  # nosec B603
+        result = subprocess.run(  # nosec
             [adb, "devices", "-l"],
             capture_output=True,
             text=True,
