@@ -2,7 +2,7 @@
 
 Implements strict local-only security controls:
 - Path traversal prevention and canonical containment verification
-- Symlink rejection (both target file and parent directory chain)
+- Symlink rejection (both target file and parent directory chain within root)
 - Null-byte and control-character input sanitization
 - Read-only SQLite connection enforcement (URI mode=ro&immutable=1 + PRAGMA query_only=ON)
 - Dependency vulnerability & pinning audit
@@ -44,10 +44,14 @@ def is_within(path: Path | str, root: Path | str) -> bool:
 
 
 def has_symlink_in_chain(path: Path | str, stop_at: Path | str | None = None) -> bool:
-    """Check whether `path` or any ancestor up to `stop_at` is a symbolic link."""
+    """Check whether `path` (and any ancestor up to `stop_at`, when provided) is a symbolic link."""
     try:
         current = Path(path)
-        stop_resolved = Path(stop_at).resolve() if stop_at is not None else None
+        if current.is_symlink():
+            return True
+        if stop_at is None:
+            return False
+        stop_resolved = Path(stop_at).resolve()
         visited: set[Path] = set()
         while True:
             if current in visited:
@@ -55,12 +59,11 @@ def has_symlink_in_chain(path: Path | str, stop_at: Path | str | None = None) ->
             visited.add(current)
             if current.is_symlink():
                 return True
-            if stop_resolved is not None:
-                try:
-                    if current.resolve() == stop_resolved:
-                        break
-                except OSError:
-                    return True
+            try:
+                if current.resolve() == stop_resolved:
+                    break
+            except OSError:
+                return True
             parent = current.parent
             if parent == current:
                 break

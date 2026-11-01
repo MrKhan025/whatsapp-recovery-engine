@@ -1,8 +1,9 @@
 """Filesystem Scanner (`wtk/scanner.py`).
 
 Scans user-authorized directories in strictly read-only mode, classifies media across
-8 categories, inspects SQLite databases and encrypted `.crypt*` backups, detects
-duplicates and corrupt headers, parses chat exports, and calculates recovery readiness.
+8 categories, reconstructs EXIF/filename timestamps, inspects SQLite databases (plus
+companion `-wal` files) and encrypted `.crypt*` backups, links chat media records,
+detects duplicates and corrupt headers, parses chat exports, and calculates recovery readiness.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .backup_analyzer import generate_backup_health_report, inspect_backup_file
-from .chat_analyzer import inspect_chat_database, parse_chat_export
+from .chat_analyzer import inspect_chat_database, link_chat_media, parse_chat_export
 from .estimator import estimate_recovery_readiness
 from .media_engine import (
     MEDIA_CATEGORIES,
@@ -20,6 +21,7 @@ from .media_engine import (
     MEDIA_MIME,
     analyze_duplicates,
     classify_media_file,
+    extract_media_timestamp_metadata,
     inspect_media_integrity,
 )
 from .security import has_symlink_in_chain, is_within, sha256_file
@@ -44,6 +46,7 @@ def inspect_sqlite(path: Path | str) -> dict[str, Any]:
         "integrity": info["integrity"],
         "ok": info["ok"],
         "format_type": info.get("format_type", "unknown"),
+        "wal_diagnostics": info.get("wal_diagnostics", {}),
         "tables": info.get("tables", []),
         "schemas": info.get("schemas", {}),
         "total_records": info.get("total_records", 0),
@@ -149,10 +152,12 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
             if kind == "media":
                 cat = classify_media_file(item, size=stat.st_size)
                 integrity = inspect_media_integrity(item)
+                ts_meta = extract_media_timestamp_metadata(item, stat_mtime=int(stat.st_mtime))
                 record["category"] = cat
                 record["corrupt"] = integrity["corrupt"]
                 record["header_valid"] = integrity["header_valid"]
                 record["corruption_reason"] = integrity["reason"]
+                record["timestamp_meta"] = ts_meta
                 category_counts[cat] = category_counts.get(cat, 0) + 1
                 hashes.setdefault(file_hash, []).append(str(item))
 
@@ -201,6 +206,10 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
     duplicate_analysis = analyze_duplicates(media_entries)
     backup_health = generate_backup_health_report(entries, source_root=str(root))
 
+    # Cross-reference SQLite message_media against scanned media entries
+    for db in chat_databases:
+        db["media_links"] = link_chat_media(db["path"], entries)
+
     report: dict[str, Any] = {
         "version": 1,
         "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -208,6 +217,9 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
         "files_scanned": visited,
         "media_count": len(media_entries),
         "corrupt_media_count": sum(1 for e in media_entries if e.get("corrupt")),
+        "timestamp_drift_count": sum(
+            1 for e in media_entries if e.get("timestamp_meta", {}).get("timestamp_drift_detected")
+        ),
         "category_counts": category_counts,
         "backup_candidates": sum(1 for x in entries if x["kind"] == "backup_candidate"),
         "chat_export_count": len(chat_exports),

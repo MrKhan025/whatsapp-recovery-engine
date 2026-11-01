@@ -1,21 +1,21 @@
 """Advanced Forensic Reporting Engine (`wtk/reports.py`).
 
-Generates all 7 required forensic report formats:
+Generates all 7 core forensic report formats PLUS the One-Click Forensic Evidence Bundle (`.zip`):
 1. PDF Reports (`recovery-report.pdf`)
 2. JSON Reports (`recovery-scan.json`)
 3. CSV File Inventories (`file-inventory.csv`)
-4. Backup Comparison Reports (`backup-comparison-report.json` & `.pdf`)
+4. Backup Comparison Reports (`backup-comparison-report.json`)
 5. Media Recovery Reports (`media-recovery-report.json`)
 6. Database Health Reports (`database-health-report.json`)
 7. Recovery Verification Certificates (`verification-certificate.json` & `.pdf`)
-
-All reports include timestamps, file counts, SHA-256 checksums, warnings, and explicit limitations.
+8. Complete Forensic Evidence Bundle (`forensic-evidence-bundle.zip` with `SHA256SUMS.txt` manifest)
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,9 +23,11 @@ from typing import Any
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
+from .security import sha256_file
+
 STANDARD_LIMITATIONS = [
     "Offline-first inventory and analysis only: no telemetry, cloud upload, or external network calls.",
-    "Encrypted WhatsApp backups (.crypt12/.crypt14/.crypt15) are cataloged by metadata and SHA-256 only; they are never decrypted without a legitimate user-owned key/restore flow.",
+    "Encrypted WhatsApp backups (.crypt12/.crypt14/.crypt15) are cataloged by metadata and SHA-256 only unless the user explicitly provides their own 32-byte key.",
     "Deleted messages or media that do not exist in any accessible database, export, or snapshot cannot be recovered.",
     "Removed files in snapshot comparisons indicate absence from the newer scan, not guaranteed recoverability.",
     "Android scoped-storage and app sandbox restrictions are strictly respected.",
@@ -51,7 +53,7 @@ def write_json(report: dict[str, Any], output: Path | str, filename: str = "reco
 
 
 def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: str = "file-inventory.csv") -> Path:
-    """Write a complete CSV file inventory with SHA-256 checksums, categories, sizes, timestamps, and flags."""
+    """Write a complete CSV file inventory with SHA-256 checksums, categories, reconstructed dates, and flags."""
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / filename
@@ -72,6 +74,8 @@ def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: st
         "size_bytes",
         "modified_timestamp",
         "modified_iso",
+        "reconstructed_date",
+        "timestamp_drift_detected",
         "sha256",
         "mime",
         "corrupt",
@@ -85,6 +89,7 @@ def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: st
         writer.writeheader()
         for e in entries:
             sqlite_info = e.get("sqlite") or {}
+            ts_meta = e.get("timestamp_meta") or {}
             warns = list(e.get("warnings") or [])
             if e.get("corruption_reason"):
                 warns.append(str(e["corruption_reason"]))
@@ -97,6 +102,8 @@ def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: st
                 "size_bytes": e.get("size", 0),
                 "modified_timestamp": e.get("modified", 0),
                 "modified_iso": e.get("modified_iso", ""),
+                "reconstructed_date": ts_meta.get("reconstructed_date", ""),
+                "timestamp_drift_detected": bool(ts_meta.get("timestamp_drift_detected", False)),
                 "sha256": e.get("sha256", ""),
                 "mime": e.get("mime", ""),
                 "corrupt": bool(e.get("corrupt", False)),
@@ -148,6 +155,7 @@ def write_media_recovery_report(
                 "category": e.get("category"),
                 "size": e.get("size"),
                 "modified_iso": e.get("modified_iso"),
+                "timestamp_meta": e.get("timestamp_meta", {}),
                 "sha256": e.get("sha256"),
                 "corrupt": bool(e.get("corrupt", False)),
             }
@@ -319,7 +327,7 @@ def write_pdf(report: dict[str, Any], output: Path | str, filename: str = "recov
     lines.extend([
         "",
         "Forensic Limitations & Disclaimers:",
-        "  - Read-only local inventory: no decryption of .crypt* files and no guarantee of deleted-data recovery.",
+        "  - Read-only local inventory: no unauthorized decryption of .crypt* files and no guarantee of deleted-data recovery.",
         "  - Deleted chats/media cannot be recovered unless present in an accessible database or backup snapshot.",
         "",
         "Scanned File Inventory (with SHA-256 Checksums):",
@@ -347,8 +355,40 @@ def write_pdf(report: dict[str, Any], output: Path | str, filename: str = "recov
     return target
 
 
+def write_forensic_bundle(output: Path | str, filename: str = "forensic-evidence-bundle.zip") -> Path:
+    """Package all generated reports in `output` into a single `.zip` bundle with a `SHA256SUMS.txt` manifest."""
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = out_dir / filename
+
+    report_Artifacts = [
+        "recovery-report.pdf",
+        "recovery-scan.json",
+        "file-inventory.csv",
+        "media-recovery-report.json",
+        "database-health-report.json",
+        "backup-comparison-report.json",
+        "verification-certificate.pdf",
+        "verification-certificate.json",
+    ]
+    manifest_lines: list[str] = [
+        f"# WhatsApp Recovery Engine (v1.0) - Forensic Bundle Manifest ({_utc_now()})"
+    ]
+
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for fname in report_Artifacts:
+            fpath = out_dir / fname
+            if fpath.exists() and fpath.is_file():
+                digest = sha256_file(fpath)
+                manifest_lines.append(f"{digest}  {fname}")
+                zf.write(fpath, fname)
+        zf.writestr("SHA256SUMS.txt", "\n".join(manifest_lines) + "\n")
+
+    return bundle_path
+
+
 def generate_all_scan_reports(report: dict[str, Any], output: Path | str) -> dict[str, str]:
-    """Generate all core reports (JSON, PDF, CSV inventory, Media Recovery, DB Health) in one call."""
+    """Generate all core reports (JSON, PDF, CSV inventory, Media Recovery, DB Health, and Forensic Bundle) in one call."""
     out_dir = Path(output)
     paths = {
         "json": str(write_json(report, out_dir, "recovery-scan.json")),
@@ -357,4 +397,5 @@ def generate_all_scan_reports(report: dict[str, Any], output: Path | str) -> dic
         "media": str(write_media_recovery_report(report, out_dir, "media-recovery-report.json")),
         "db_health": str(write_database_health_report(report, out_dir, "database-health-report.json")),
     }
+    paths["bundle"] = str(write_forensic_bundle(out_dir))
     return paths
