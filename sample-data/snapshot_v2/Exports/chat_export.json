@@ -1,0 +1,16 @@
+{
+  "messages": [
+    {
+      "id": "101",
+      "sender": "Participant Alpha",
+      "timestamp": "2026-10-15 09:15:00 UTC",
+      "text": "JSON export test record 1"
+    },
+    {
+      "id": "102",
+      "sender": "Participant Beta",
+      "timestamp": "2026-10-15 09:16:00 UTC",
+      "text": "JSON export test record 2"
+    }
+  ]
+}
