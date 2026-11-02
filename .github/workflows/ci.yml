@@ -39,7 +39,7 @@ jobs:
 
       - name: Verify sample forensic workspace bootstrap
         run: |
-          .venv/bin/python -m wtk.cli init-samples --target ./sample_data
+          PYTHONPATH=. .venv/bin/python main.py init-sample
 
       - name: Run full Pytest suite (14 forensic & security categories)
         run: |
