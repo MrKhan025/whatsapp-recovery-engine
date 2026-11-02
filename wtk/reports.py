@@ -1,14 +1,14 @@
-"""Advanced Forensic Reporting Engine (`wtk/reports.py`).
+"""Advanced Forensic Reporting & Evidence Bundle Engine (`wtk/reports.py`) for v2.0.
 
-Generates all 7 core forensic report formats PLUS the One-Click Forensic Evidence Bundle (`.zip`):
+Generates all 8 forensic report and evidence formats:
 1. PDF Reports (`recovery-report.pdf`)
 2. JSON Reports (`recovery-scan.json`)
 3. CSV File Inventories (`file-inventory.csv`)
 4. Backup Comparison Reports (`backup-comparison-report.json`)
 5. Media Recovery Reports (`media-recovery-report.json`)
 6. Database Health Reports (`database-health-report.json`)
-7. Recovery Verification Certificates (`verification-certificate.json` & `.pdf`)
-8. Complete Forensic Evidence Bundle (`forensic-evidence-bundle.zip` with `SHA256SUMS.txt` manifest)
+7. Recovery Verification & Evidence Certificates (`verification-certificate.json` & `.pdf`)
+8. Complete Forensic Evidence Bundle (`forensic-evidence-bundle.zip` with `SHA256SUMS.txt` & `SHA512SUMS.txt`)
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ from typing import Any
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-from .security import sha256_file
+from .security import dual_checksum_file
 
 STANDARD_LIMITATIONS = [
     "Offline-first inventory and analysis only: no telemetry, cloud upload, or external network calls.",
-    "Encrypted WhatsApp backups (.crypt12/.crypt14/.crypt15) are cataloged by metadata and SHA-256 only unless the user explicitly provides their own 32-byte key.",
+    "CRYPT12, CRYPT14, and CRYPT15 encrypted backups have distinct header layouts and key derivations and are never brute-forced.",
     "Deleted messages or media that do not exist in any accessible database, export, or snapshot cannot be recovered.",
     "Removed files in snapshot comparisons indicate absence from the newer scan, not guaranteed recoverability.",
     "Android scoped-storage and app sandbox restrictions are strictly respected.",
@@ -53,7 +53,7 @@ def write_json(report: dict[str, Any], output: Path | str, filename: str = "reco
 
 
 def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: str = "file-inventory.csv") -> Path:
-    """Write a complete CSV file inventory with SHA-256 checksums, categories, reconstructed dates, and flags."""
+    """Write a complete CSV file inventory with SHA-256 and SHA-512 checksums, categories, and flags."""
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / filename
@@ -77,8 +77,10 @@ def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: st
         "reconstructed_date",
         "timestamp_drift_detected",
         "sha256",
+        "sha512",
         "mime",
         "corrupt",
+        "orphaned",
         "is_duplicate",
         "encrypted",
         "sqlite_integrity",
@@ -105,8 +107,10 @@ def write_csv_inventory(report: dict[str, Any], output: Path | str, filename: st
                 "reconstructed_date": ts_meta.get("reconstructed_date", ""),
                 "timestamp_drift_detected": bool(ts_meta.get("timestamp_drift_detected", False)),
                 "sha256": e.get("sha256", ""),
+                "sha512": e.get("sha512", ""),
                 "mime": e.get("mime", ""),
                 "corrupt": bool(e.get("corrupt", False)),
+                "orphaned": bool(e.get("orphaned", False)),
                 "is_duplicate": e.get("sha256") in dup_hashes,
                 "encrypted": bool(e.get("encrypted", False)),
                 "sqlite_integrity": sqlite_info.get("integrity", ""),
@@ -120,7 +124,7 @@ def write_media_recovery_report(
     output: Path | str,
     filename: str = "media-recovery-report.json",
 ) -> Path:
-    """Generate a dedicated Media Recovery Report with category breakdowns, duplicates, corrupt files, and checksums."""
+    """Generate a dedicated Media Recovery Report with category breakdowns, orphaned media, duplicates, and corrupt files."""
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
     media_entries = [e for e in report.get("entries", []) if e.get("kind") == "media"]
@@ -133,6 +137,7 @@ def write_media_recovery_report(
         "total_media_files": len(media_entries),
         "total_media_bytes": sum(int(e.get("size", 0)) for e in media_entries),
         "corrupt_media_count": len(corrupt_entries),
+        "orphaned_media_count": report.get("orphaned_media_count", 0),
         "category_counts": report.get("category_counts", {}),
         "duplicate_summary": {
             "duplicate_groups": report.get("duplicate_analysis", {}).get("group_count", 0),
@@ -157,7 +162,9 @@ def write_media_recovery_report(
                 "modified_iso": e.get("modified_iso"),
                 "timestamp_meta": e.get("timestamp_meta", {}),
                 "sha256": e.get("sha256"),
+                "sha512": e.get("sha512", ""),
                 "corrupt": bool(e.get("corrupt", False)),
+                "orphaned": bool(e.get("orphaned", False)),
             }
             for e in media_entries
         ],
@@ -188,6 +195,7 @@ def write_database_health_report(
         "summary": {
             "total_backup_files": backup_health.get("total_backup_files", 0),
             "encrypted_crypt_count": backup_health.get("encrypted_crypt_count", 0),
+            "format_breakdown": backup_health.get("format_breakdown", {}),
             "accessible_sqlite_count": backup_health.get("accessible_sqlite_count", 0),
             "healthy_sqlite_count": backup_health.get("healthy_sqlite_count", 0),
             "corrupt_sqlite_count": backup_health.get("corrupt_sqlite_count", 0),
@@ -237,7 +245,8 @@ def write_verification_certificate(
         "generated_at": _utc_now(),
         **verification_result,
         "limitations": [
-            "This certificate attests that exported files matched their source SHA-256 digests at copy time.",
+            "This certificate attests that exported files matched their source SHA-256 and SHA-512 digests at copy time.",
+            "Verification mode explicitly indicates whether an HMAC-SHA256 cryptographic signature or dual-checksum verification was used.",
             "Original source backup files were preserved without modification.",
         ],
     }
@@ -246,20 +255,22 @@ def write_verification_certificate(
 
     pdf_target = out_dir / pdf_filename
     pdf = canvas.Canvas(str(pdf_target), pagesize=A4)
-    width, height = A4
+    _, height = A4
     y = height - 48
-    pdf.setTitle("WhatsApp Recovery Engine - Verification Certificate")
+    pdf.setTitle("WhatsApp Recovery Engine v2.0 - Verification Certificate")
 
     header_lines = [
-        "WHATSAPP RECOVERY ENGINE (v1.0) - RECOVERY VERIFICATION CERTIFICATE",
-        f"Certificate ID: {verification_result.get('certificate_id', 'N/A')}",
+        "WHATSAPP RECOVERY ENGINE (v2.0) - RECOVERY VERIFICATION CERTIFICATE",
+        f"Certificate ID: {verification_result.get('certificate_id', 'N/A')} | Session: {verification_result.get('session_id', 'N/A')}",
+        f"Verification Mode: {verification_result.get('verification_mode', 'checksum_verified_only')}",
         f"Timestamp: {verification_result.get('timestamp', _utc_now())}",
         f"Source Root: {verification_result.get('source_root', '')}",
         f"Destination: {verification_result.get('destination', '')}",
         f"Files Requested: {verification_result.get('total_requested', 0)} | Verified OK: {verification_result.get('verified_count', 0)} | Failed: {verification_result.get('failed_count', 0)}",
         f"Manifest SHA-256: {verification_result.get('manifest_sha256', '')}",
+        f"Manifest SHA-512: {str(verification_result.get('manifest_sha512', ''))[:64]}...",
         "-" * 95,
-        "Verified File Checksums (Pre-Copy vs Post-Copy SHA-256):",
+        "Verified File Checksums (Pre-Copy vs Post-Copy SHA-256 & SHA-512):",
     ]
     for line in header_lines:
         pdf.drawString(36, y, line[:115])
@@ -289,16 +300,16 @@ def write_pdf(report: dict[str, Any], output: Path | str, filename: str = "recov
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / filename
     pdf = canvas.Canvas(str(target), pagesize=A4)
-    width, height = A4
+    _, height = A4
     y = height - 45
-    pdf.setTitle("WhatsApp Recovery Engine - Forensic Scan Report")
+    pdf.setTitle("WhatsApp Recovery Engine v2.0 - Forensic Scan Report")
 
     est = report.get("recovery_estimate", {})
     bh = report.get("backup_health", {})
     cats = report.get("category_counts", {})
 
     lines = [
-        "WHATSAPP RECOVERY ENGINE (v1.0) - FORENSIC SCAN & HEALTH REPORT",
+        "WHATSAPP RECOVERY ENGINE (v2.0) - FORENSIC SCAN & HEALTH REPORT",
         f"Generated At: {report.get('timestamp', _utc_now())}",
         f"Scanned Source: {report.get('source', '')}",
         f"Total Files Scanned: {report.get('files_scanned', 0)} | Media Files: {report.get('media_count', 0)} | Corrupt Media: {report.get('corrupt_media_count', 0)}",
@@ -356,12 +367,12 @@ def write_pdf(report: dict[str, Any], output: Path | str, filename: str = "recov
 
 
 def write_forensic_bundle(output: Path | str, filename: str = "forensic-evidence-bundle.zip") -> Path:
-    """Package all generated reports in `output` into a single `.zip` bundle with a `SHA256SUMS.txt` manifest."""
+    """Package all generated reports in `output` into a single `.zip` bundle with `SHA256SUMS.txt` and `SHA512SUMS.txt`."""
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = out_dir / filename
 
-    report_Artifacts = [
+    report_artifacts = [
         "recovery-report.pdf",
         "recovery-scan.json",
         "file-inventory.csv",
@@ -371,18 +382,23 @@ def write_forensic_bundle(output: Path | str, filename: str = "forensic-evidence
         "verification-certificate.pdf",
         "verification-certificate.json",
     ]
-    manifest_lines: list[str] = [
-        f"# WhatsApp Recovery Engine (v1.0) - Forensic Bundle Manifest ({_utc_now()})"
+    sha256_lines: list[str] = [
+        f"# WhatsApp Recovery Engine (v2.0) - SHA-256 Manifest ({_utc_now()})"
+    ]
+    sha512_lines: list[str] = [
+        f"# WhatsApp Recovery Engine (v2.0) - SHA-512 Manifest ({_utc_now()})"
     ]
 
     with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname in report_Artifacts:
+        for fname in report_artifacts:
             fpath = out_dir / fname
             if fpath.exists() and fpath.is_file():
-                digest = sha256_file(fpath)
-                manifest_lines.append(f"{digest}  {fname}")
+                hashes = dual_checksum_file(fpath)
+                sha256_lines.append(f"{hashes['sha256']}  {fname}")
+                sha512_lines.append(f"{hashes['sha512']}  {fname}")
                 zf.write(fpath, fname)
-        zf.writestr("SHA256SUMS.txt", "\n".join(manifest_lines) + "\n")
+        zf.writestr("SHA256SUMS.txt", "\n".join(sha256_lines) + "\n")
+        zf.writestr("SHA512SUMS.txt", "\n".join(sha512_lines) + "\n")
 
     return bundle_path
 

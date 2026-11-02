@@ -1,11 +1,7 @@
-"""WhatsApp Recovery Engine – Advanced Edition (v1.0).
-
-An offline-first, read-only WhatsApp backup analysis, chat export inspection,
-media discovery, SHA-256 verification, and forensic reporting platform.
-"""
+"""WhatsApp Recovery Engine v2.0 — Professional Digital Forensics & Backup Recovery Platform."""
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __author__ = "MrKhan025"
 __all__ = ["__version__"]

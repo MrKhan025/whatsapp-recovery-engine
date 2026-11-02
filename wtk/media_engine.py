@@ -1,23 +1,33 @@
 """Advanced Media Recovery Engine (`wtk/media_engine.py`).
 
-Detects, classifies, validates, filters, deduplicates, reconstructs filename/EXIF
-timestamps, previews, and safely exports:
-- Photos
-- Videos
-- Voice notes
-- Audio files
-- Documents
-- Stickers
-- GIFs
-- Thumbnails
+Supports all 8 WhatsApp media categories:
+- Images (`photos`)
+- Videos (`videos`)
+- Voice messages (`voice_notes`)
+- Audio (`audio`)
+- Documents (`documents`)
+- Stickers (`stickers`)
+- GIFs (`gifs`)
+- Thumbnails (`thumbnails`)
+
+Capabilities:
+- Orphaned media detection (`detect_orphaned_media`)
+- Media-to-message relationship matching
+- EXIF metadata extraction & filename timestamp reconstruction (`extract_media_timestamp_metadata`)
+- File magic signature validation & corruption detection (`inspect_media_integrity`)
+- Duplicate media detection (`analyze_duplicates`)
+- Safe thumbnail generation (`generate_media_thumbnail`)
 """
 
 from __future__ import annotations
 
+import io
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .security import sha256_bytes, validate_safe_path
 
 MEDIA_MIME: dict[str, str] = {
     ".jpg": "image/jpeg",
@@ -63,7 +73,6 @@ MEDIA_CATEGORIES = (
     "thumbnails",
 )
 
-# Matches IMG-20261015-WA0001.jpg, VID-20261015-WA0001.mp4, PTT-20261001-WA0001.opus, or 2026-10-15
 _WA_FILENAME_DATE_RE = re.compile(
     r"(?:IMG|VID|PTT|AUD|DOC|STK|GIF|thumb)?[-_\s]*(?P<y>20\d{2})[-_]?(\b|)(?P<m>0[1-9]|1[0-2])[-_]?(\b|)(?P<d>0[1-9]|[12]\d|3[01])",
     re.IGNORECASE,
@@ -72,11 +81,7 @@ _EXIF_DATETIME_RE = re.compile(rb"(20\d{2}):(0[1-9]|1[0-2]):(0[1-9]|[12]\d|3[01]
 
 
 def extract_media_timestamp_metadata(path: Path | str, stat_mtime: int | None = None) -> dict[str, Any]:
-    """Reconstruct original media date from WhatsApp filename patterns and embedded JPEG EXIF headers.
-
-    Detects when filesystem `mtime` drifted from the original embedded capture/filename date
-    (common after copying backups across phones or SD cards).
-    """
+    """Reconstruct original media date from WhatsApp filename patterns and embedded JPEG EXIF headers."""
     p = Path(path)
     mtime = stat_mtime if stat_mtime is not None else (int(p.stat().st_mtime) if p.exists() else 0)
     mtime_date = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d") if mtime > 0 else None
@@ -87,6 +92,7 @@ def extract_media_timestamp_metadata(path: Path | str, stat_mtime: int | None = 
         filename_date = f"{m.group('y')}-{m.group('m')}-{m.group('d')}"
 
     exif_datetime: str | None = None
+    exif_camera: str | None = None
     if p.suffix.lower() in (".jpg", ".jpeg") and p.exists() and p.is_file():
         try:
             with p.open("rb") as f:
@@ -97,6 +103,8 @@ def extract_media_timestamp_metadata(path: Path | str, stat_mtime: int | None = 
                     f"{em.group(1).decode()}-{em.group(2).decode()}-{em.group(3).decode()} "
                     f"{em.group(4).decode()}:{em.group(5).decode()}:{em.group(6).decode()} UTC"
                 )
+            if b"Exif\x00\x00" in head:
+                exif_camera = "EXIF_HEADER_PRESENT"
         except OSError:
             exif_datetime = None
 
@@ -106,6 +114,7 @@ def extract_media_timestamp_metadata(path: Path | str, stat_mtime: int | None = 
     return {
         "filename_date": filename_date,
         "exif_datetime": exif_datetime,
+        "exif_header": exif_camera,
         "reconstructed_date": reconstructed or mtime_date,
         "filesystem_date": mtime_date,
         "timestamp_drift_detected": drift_detected,
@@ -165,73 +174,137 @@ def classify_media_file(path: Path | str, size: int | None = None) -> str:
 
 
 def inspect_media_integrity(path: Path | str) -> dict[str, Any]:
-    """Check whether a media file is empty, truncated, or has a mismatched magic header."""
+    """Validate file magic signature and detect empty or corrupt media headers."""
     p = Path(path)
     suffix = p.suffix.lower()
     try:
         size = p.stat().st_size
         if size == 0:
-            return {"corrupt": True, "header_valid": False, "reason": "Empty file (0 bytes)"}
+            return {"corrupt": True, "header_valid": False, "signature": "empty", "reason": "Empty file (0 bytes)"}
         with p.open("rb") as f:
             header = f.read(32)
     except OSError as exc:
-        return {"corrupt": True, "header_valid": False, "reason": f"Unreadable file: {exc}"}
+        return {"corrupt": True, "header_valid": False, "signature": "unreadable", "reason": f"Unreadable file: {exc}"}
 
     if suffix in (".jpg", ".jpeg"):
         if header.startswith(b"\xff\xd8\xff"):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "jpeg", "reason": None}
         if size >= 16 and not header.startswith(b"image") and not header.startswith(b"test"):
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid JPEG header (missing FF D8 FF)"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid JPEG header (missing FF D8 FF)"}
 
     elif suffix == ".png":
         if header.startswith(b"\x89PNG\r\n\x1a\n"):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "png", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid PNG signature"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid PNG signature"}
 
     elif suffix == ".gif":
         if header.startswith((b"GIF87a", b"GIF89a")):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "gif", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid GIF signature"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid GIF signature"}
 
     elif suffix == ".webp":
         if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "webp", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid WebP RIFF header"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid WebP RIFF header"}
 
     elif suffix == ".pdf":
         if header.startswith(b"%PDF-"):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "pdf", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid PDF header (missing %PDF-)"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid PDF header (missing %PDF-)"}
 
     elif suffix in (".ogg", ".opus"):
         if header.startswith(b"OggS"):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "ogg_opus", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid Ogg/Opus container header"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid Ogg/Opus container header"}
 
     elif suffix in (".mp4", ".mov", ".m4a", ".3gp"):
         if b"ftyp" in header[:16] or b"moov" in header[:16] or b"wide" in header[:16]:
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "isobmff", "reason": None}
         if size >= 24:
-            return {"corrupt": True, "header_valid": False, "reason": "Missing ISO Base Media (ftyp/moov) header"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Missing ISO Base Media (ftyp/moov) header"}
 
     elif suffix == ".wav":
         if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WAVE":
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "wav", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid WAV RIFF header"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid WAV RIFF header"}
 
     elif suffix in (".zip", ".docx", ".xlsx", ".pptx"):
         if header.startswith((b"PK\x03\x04", b"PK\x05\x06")):
-            return {"corrupt": False, "header_valid": True, "reason": None}
+            return {"corrupt": False, "header_valid": True, "signature": "zip_ooxml", "reason": None}
         if size >= 16:
-            return {"corrupt": True, "header_valid": False, "reason": "Invalid ZIP/OOXML container signature"}
+            return {"corrupt": True, "header_valid": False, "signature": "mismatch", "reason": "Invalid ZIP/OOXML container signature"}
 
-    return {"corrupt": False, "header_valid": True, "reason": None}
+    return {"corrupt": False, "header_valid": True, "signature": "generic", "reason": None}
+
+
+def generate_media_thumbnail(
+    source_path: Path | str,
+    output_dir: Path | str,
+    max_dim: int = 160,
+) -> dict[str, Any]:
+    """Generate a safe thumbnail in `output_dir` without modifying `source_path`."""
+    src = validate_safe_path(source_path, must_exist=True, allow_symlinks=False, reject_traversal_tokens=False)
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from PIL import Image
+        with Image.open(src) as img:
+            img_copy = img.copy()
+            img_copy.thumbnail((max_dim, max_dim))
+            buf = io.BytesIO()
+            img_copy.convert("RGB").save(buf, format="JPEG", quality=80)
+            thumb_bytes = buf.getvalue()
+            target = out / f"thumb_{src.stem}.jpg"
+            target.write_bytes(thumb_bytes)
+            return {
+                "generated": True,
+                "method": "pillow_jpeg",
+                "source": str(src),
+                "thumbnail_path": str(target),
+                "size": len(thumb_bytes),
+                "sha256": sha256_bytes(thumb_bytes),
+            }
+    except Exception:
+        # Fallback for synthetic/minimal JPEGs or non-image media: generate a clean SVG thumbnail card
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{max_dim}" height="{max_dim}" viewBox="0 0 160 160">'
+            f'<rect width="160" height="160" rx="12" fill="#152942" stroke="#3be2b0" stroke-width="2"/>'
+            f'<text x="80" y="75" font-family="sans-serif" font-size="14" font-weight="bold" fill="#3be2b0" text-anchor="middle">{src.suffix.upper().lstrip(".") or "MEDIA"}</text>'
+            f'<text x="80" y="102" font-family="sans-serif" font-size="10" fill="#eef5ff" text-anchor="middle">{src.name[:18]}</text>'
+            f'</svg>'
+        ).encode("utf-8")
+        target = out / f"thumb_{src.stem}.svg"
+        target.write_bytes(svg)
+        return {
+            "generated": True,
+            "method": "svg_badge",
+            "source": str(src),
+            "thumbnail_path": str(target),
+            "size": len(svg),
+            "sha256": sha256_bytes(svg),
+        }
+
+
+def detect_orphaned_media(
+    entries: list[dict[str, Any]],
+    linked_disk_paths: set[str],
+) -> dict[str, Any]:
+    """Identify media files present on disk that have no matching record in the SQLite database."""
+    media_items = [e for e in entries if e.get("kind") == "media"]
+    orphaned = [e for e in media_items if e.get("path") not in linked_disk_paths]
+    return {
+        "total_media": len(media_items),
+        "linked_count": len(media_items) - len(orphaned),
+        "orphaned_count": len(orphaned),
+        "orphaned_files": orphaned,
+    }
 
 
 def analyze_duplicates(entries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -283,6 +356,7 @@ def filter_media_entries(
     query: str | None = None,
     only_corrupt: bool = False,
     only_duplicates: bool = False,
+    only_orphaned: bool = False,
 ) -> list[dict[str, Any]]:
     """Filter media inventory entries by category, byte size, modification timestamp, name query, and flags."""
     q_lower = (query or "").strip().lower()
@@ -318,6 +392,8 @@ def filter_media_entries(
         if only_corrupt and not item.get("corrupt", False):
             continue
         if only_duplicates and item.get("sha256") not in dup_hashes:
+            continue
+        if only_orphaned and not item.get("orphaned", False):
             continue
         filtered.append(item)
 

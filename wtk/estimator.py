@@ -54,11 +54,10 @@ def estimate_recovery_readiness(
     missing_requirements: list[str] = []
     next_steps: list[str] = []
 
-    # 1. Database & Chat evaluation
     if healthy_dbs:
         total_msgs = sum(int(e["sqlite"].get("message_count", 0)) for e in healthy_dbs)
         evidence.append(
-            f"Found {len(healthy_dbs)} accessible, intact SQLite database(s) passing PRAGMA integrity_check ({total_msgs} accessible message records)."
+            f"Found {len(healthy_dbs)} accessible, intact SQLite database(s) passing integrity verification ({total_msgs} accessible message records)."
         )
     if corrupt_dbs:
         evidence.append(
@@ -81,10 +80,9 @@ def estimate_recovery_readiness(
             f"Detected {len(suspicious_backups)} empty or suspiciously small backup file(s)."
         )
 
-    # 2. Media evaluation
     if intact_media:
         evidence.append(
-            f"Discovered {len(intact_media)} intact media file(s) across accessible folders ready for SHA-256 verified export."
+            f"Discovered {len(intact_media)} intact media file(s) across accessible folders ready for SHA-256/SHA-512 verified export."
         )
     if corrupt_media:
         evidence.append(
@@ -95,7 +93,6 @@ def estimate_recovery_readiness(
             f"Identified {len(duplicate_groups)} SHA-256 duplicate group(s), providing redundant copies for those files."
         )
 
-    # 3. Snapshot comparison evaluation
     if snapshot_comparison and isinstance(snapshot_comparison.get("summary"), dict):
         summary = snapshot_comparison["summary"]
         removed_count = int(summary.get("removed", 0))
@@ -109,7 +106,6 @@ def estimate_recovery_readiness(
                 "Check the older backup snapshot directory if you still retain the older folder copy to recover files absent from the newer scan."
             )
 
-    # Determine Readiness Level: High / Medium / Low
     if (healthy_dbs and intact_media and not corrupt_dbs) or (healthy_dbs and len(healthy_dbs) >= 1 and not suspicious_backups) or (len(intact_media) >= 3 and (healthy_dbs or healthy_encrypted or chat_exports)):
         readiness = "High"
     elif intact_media or healthy_dbs or healthy_encrypted or chat_exports:
@@ -117,7 +113,6 @@ def estimate_recovery_readiness(
     else:
         readiness = "Low"
 
-    # Populate missing requirements & next steps
     if not healthy_dbs and not healthy_encrypted and not chat_exports:
         missing_requirements.append(
             "No valid WhatsApp chat database (msgstore.db / .crypt*) or chat export (TXT/JSON/HTML) was found in the scanned path."
@@ -133,15 +128,15 @@ def estimate_recovery_readiness(
 
     if intact_media:
         next_steps.append(
-            "Use the Media Recovery or Recovery Verification tab to export intact media to a separate directory and verify SHA-256 checksums."
+            "Use the Recovery Workspace or Media Recovery tab to preview and export intact media to a separate directory and verify SHA-256/SHA-512 checksums."
         )
     if healthy_dbs or chat_exports:
         next_steps.append(
-            "Open the Chat Analyzer tab to inspect accessible SQLite tables, timestamps, and searchable chat exports."
+            "Open the Chat Analyzer and Timeline Explorer tabs to inspect accessible SQLite tables, conversation gaps, and searchable chat exports."
         )
     if healthy_encrypted and not healthy_dbs:
         next_steps.append(
-            "Preserve the original .crypt* backup files in place and follow WhatsApp's official in-app restore flow on an authorized device."
+            "Preserve the original .crypt* backup files in place and follow WhatsApp's official in-app restore flow or provide your authorized 32-byte key."
         )
     if not evidence:
         evidence.append("Scanned directory contained no recognizable WhatsApp databases, backups, or media files.")

@@ -1,9 +1,9 @@
-"""Self-healing synthetic sample data bootstrapper (`wtk/sample_bootstrap.py`).
+"""Self-healing synthetic sample data bootstrapper (`wtk/sample_bootstrap.py`) for v2.0.
 
-Ensures that `sample-data/snapshot_v1` and `sample-data/snapshot_v2` are always present
-with valid SQLite databases, `.crypt14` headers, TXT/JSON/HTML chat exports, and
-media files across all 8 categories—even if a user cloned or uploaded the repository
-without binary sample files or created empty placeholder files via the GitHub web editor.
+Ensures `sample-data/snapshot_v1` and `sample-data/snapshot_v2` are always present
+with valid SQLite databases (including `message_media` table for media relationship matching),
+CRYPT12, CRYPT14, and CRYPT15 backup files, TXT/JSON/HTML chat exports, VCF/JSON contacts,
+and media across all 8 categories.
 """
 
 from __future__ import annotations
@@ -53,16 +53,16 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
     v2_db = v2 / "Databases" / "msgstore.db"
     v2_wa = v2 / "Databases" / "wa.db"
     marker_html = v2 / "Exports" / "chat_export.html"
-    marker_img = v2 / "Media" / "WhatsApp Images" / "IMG-20261001-WA0001.jpg"
+    marker_vcf = v2 / "Exports" / "contacts.vcf"
+    marker_c15 = v2 / "Databases" / "msgstore-2026-10-18.1.db.crypt15"
 
     if (
         _is_valid_sqlite(v1_db)
         and _is_valid_sqlite(v2_db)
         and _is_valid_sqlite(v2_wa)
         and marker_html.exists()
-        and marker_html.stat().st_size > 20
-        and marker_img.exists()
-        and marker_img.stat().st_size > 20
+        and marker_vcf.exists()
+        and marker_c15.exists()
     ):
         return root
 
@@ -70,8 +70,11 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         "CREATE TABLE chat (_id INTEGER PRIMARY KEY, subject TEXT, created_timestamp INTEGER);",
         "CREATE TABLE jid (_id INTEGER PRIMARY KEY, raw_string TEXT);",
         "CREATE TABLE message (_id INTEGER PRIMARY KEY, sender_jid_raw_string TEXT, text_data TEXT, timestamp INTEGER, from_me INTEGER);",
+        "CREATE TABLE message_media (message_row_id INTEGER PRIMARY KEY, file_path TEXT, file_size INTEGER, sha256 TEXT);",
         "INSERT INTO chat VALUES (1, 'Project Operations Team', 1730000000000);",
         "INSERT INTO jid VALUES (1, 'participant_a@s.whatsapp.net'), (2, 'participant_b@s.whatsapp.net');",
+        "INSERT INTO message_media VALUES (1, 'Media/WhatsApp Images/IMG-20261001-WA0001.jpg', 47, '');",
+        "INSERT INTO message_media VALUES (4, 'Media/WhatsApp Video/VID-20261010-MISSING.mp4', 102400, '');",
     ]
 
     # 1. Snapshot v1 SQLite DB & Media
@@ -87,7 +90,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         ],
     )
     (v1 / "Databases" / "msgstore-2026-10-01.1.db.crypt14").write_bytes(
-        b"ENCRYPTED_WA_CRYPT14_HEADER_" + b"\x9a" * 600
+        b"WRE_CRYPT14_PROTO_HDR".ljust(66, b"\x02") + b"\x22" * 16 + b"\x9a" * 600
     )
 
     (v1 / "Media" / "WhatsApp Images").mkdir(parents=True, exist_ok=True)
@@ -105,7 +108,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
     (v1 / "Media" / "WhatsApp Images" / "IMG-20261001-WA0002.jpg").write_bytes(jpeg_v1_only)
     (v1 / "Media" / "WhatsApp Voice Notes" / "PTT-20261001-WA0001.opus").write_bytes(opus_bytes)
 
-    # 2. Snapshot v2 SQLite DBs & Encrypted Backups
+    # 2. Snapshot v2 SQLite DBs & CRYPT12 / CRYPT14 / CRYPT15 Backups
     _build_sqlite_db(
         v2_db,
         msg_schema,
@@ -128,8 +131,14 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         "",
         [],
     )
+    (v2 / "Databases" / "msgstore-2026-10-12.1.db.crypt12").write_bytes(
+        b"WRE_CRYPT12_FIXED_HDR".ljust(51, b"\x03") + b"\x22" * 16 + b"\xa5" * 640
+    )
     (v2 / "Databases" / "msgstore-2026-10-15.1.db.crypt14").write_bytes(
-        b"ENCRYPTED_WA_CRYPT14_HEADER_" + b"\xb4" * 720
+        b"WRE_CRYPT14_PROTO_HDR".ljust(66, b"\x02") + b"\x22" * 16 + b"\xb4" * 720
+    )
+    (v2 / "Databases" / "msgstore-2026-10-18.1.db.crypt15").write_bytes(
+        b"WRE_CRYPT15_PROTO_HDR".ljust(59, b"\x01") + b"\x22" * 16 + b"\xc7" * 760
     )
     (v2 / "Databases" / "msgstore-empty.db.crypt14").write_bytes(b"")
 
@@ -169,7 +178,7 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
     )
     (v2 / "Media" / "WhatsApp Images" / "Thumbs" / "thumb-IMG-20261001.jpg").write_bytes(jpeg_bytes)
 
-    # 4. Chat Exports (TXT, JSON, HTML)
+    # 4. Chat Exports (TXT, JSON, HTML) & Contacts (VCF, JSON)
     exports_dir = v2 / "Exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
     (exports_dir / "WhatsApp Chat with Operations Team.txt").write_text(
@@ -182,8 +191,8 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         json.dumps(
             {
                 "messages": [
-                    {"id": "101", "sender": "Participant Alpha", "timestamp": "2026-10-15 09:15:00 UTC", "text": "JSON export test record 1"},
-                    {"id": "102", "sender": "Participant Beta", "timestamp": "2026-10-15 09:16:00 UTC", "text": "JSON export test record 2"},
+                    {"id": "101", "sender": "participant_a@s.whatsapp.net", "timestamp": "2026-10-15 09:15:00 UTC", "text": "JSON export test record 1"},
+                    {"id": "102", "sender": "participant_b@s.whatsapp.net", "timestamp": "2026-10-15 09:16:00 UTC", "text": "JSON export test record 2"},
                 ]
             },
             indent=2,
@@ -197,11 +206,16 @@ def ensure_sample_data(sample_root: Path | str) -> Path:
         "</body></html>",
         encoding="utf-8",
     )
+    (exports_dir / "contacts.vcf").write_text(
+        "BEGIN:VCARD\nVERSION:3.0\nFN:Participant Alpha\nTEL:participant_a@s.whatsapp.net\nEND:VCARD\n"
+        "BEGIN:VCARD\nVERSION:3.0\nFN:Participant Beta\nTEL:participant_b@s.whatsapp.net\nEND:VCARD\n",
+        encoding="utf-8",
+    )
 
     (root / "README.txt").write_text(
         "Synthetic, zero-PII WhatsApp backup sample dataset (snapshot_v1 and snapshot_v2).\n"
-        "Contains unencrypted SQLite msgstore.db/wa.db fixtures, placeholder .crypt14 headers,\n"
-        "TXT/JSON/HTML chat exports, and sample media across all 8 categories for automated testing.\n",
+        "Contains unencrypted SQLite msgstore.db/wa.db fixtures, CRYPT12/CRYPT14/CRYPT15 headers,\n"
+        "TXT/JSON/HTML chat exports, VCF contacts, and sample media across all 8 categories.\n",
         encoding="utf-8",
     )
     return root

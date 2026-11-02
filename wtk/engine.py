@@ -1,7 +1,7 @@
-"""Snapshot Comparison and Verified Export Engine (`wtk/engine.py`).
+"""Snapshot Comparison, Recovery Preview, and Verified Export Engine (`wtk/engine.py`).
 
-Preserves all v2.0 public functions (`compare_snapshots`, `load_snapshot`, `verified_export`)
-and adds multi-snapshot timeline comparison (`compare_multiple_snapshots`).
+Preserves all v1/v2 public functions (`compare_snapshots`, `compare_multiple_snapshots`,
+`load_snapshot`, `verified_export`, `preview_recovery_operation`).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .verification import verified_export
+from .verification import preview_recovery_operation, verified_export
 
 
 def compare_snapshots(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
@@ -98,4 +98,10 @@ def load_snapshot(path: str | Path) -> dict[str, Any]:
     return data
 
 
-__all__ = ["compare_snapshots", "compare_multiple_snapshots", "load_snapshot", "verified_export"]
+__all__ = [
+    "compare_snapshots",
+    "compare_multiple_snapshots",
+    "load_snapshot",
+    "verified_export",
+    "preview_recovery_operation",
+]

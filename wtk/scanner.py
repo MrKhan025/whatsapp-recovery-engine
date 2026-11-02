@@ -1,9 +1,10 @@
 """Filesystem Scanner (`wtk/scanner.py`).
 
 Scans user-authorized directories in strictly read-only mode, classifies media across
-8 categories, reconstructs EXIF/filename timestamps, inspects SQLite databases (plus
-companion `-wal` files) and encrypted `.crypt*` backups, links chat media records,
-detects duplicates and corrupt headers, parses chat exports, and calculates recovery readiness.
+8 categories, reconstructs EXIF/filename timestamps, detects orphaned media, inspects
+SQLite databases (plus companion `-wal` files) and encrypted CRYPT12/14/15 backups,
+links chat media records, detects duplicates and corrupt headers, parses chat exports,
+and runs AI-assisted local forensic analysis.
 """
 
 from __future__ import annotations
@@ -15,16 +16,18 @@ from typing import Any
 from .backup_analyzer import generate_backup_health_report, inspect_backup_file
 from .chat_analyzer import inspect_chat_database, link_chat_media, parse_chat_export
 from .estimator import estimate_recovery_readiness
+from .forensic_ai import generate_forensic_findings
 from .media_engine import (
     MEDIA_CATEGORIES,
     MEDIA_EXTENSIONS,
     MEDIA_MIME,
     analyze_duplicates,
     classify_media_file,
+    detect_orphaned_media,
     extract_media_timestamp_metadata,
     inspect_media_integrity,
 )
-from .security import has_symlink_in_chain, is_within, sha256_file
+from .security import dual_checksum_file, has_symlink_in_chain, is_within, sha256_file
 
 BACKUP_HINTS = ("msgstore", "crypt", "backup", "wa.db", "chatsettings", "axolotl", "stickers.db")
 CHAT_EXPORT_HINTS = ("whatsapp chat", "chat_export", "chat-export", "_chat", "messages.json", "chat.html", "chat.txt")
@@ -40,7 +43,7 @@ def inspect_sqlite(path: Path | str) -> dict[str, Any]:
             "detail": "File does not exist or is a symlink",
             "ok": False,
         }
-    info = inspect_chat_database(p, sample_limit=25)
+    info = inspect_chat_database(p, sample_limit=50)
     return {
         "supported": info["supported"],
         "integrity": info["integrity"],
@@ -55,6 +58,9 @@ def inspect_sqlite(path: Path | str) -> dict[str, Any]:
         "earliest_timestamp": info.get("earliest_timestamp"),
         "latest_timestamp": info.get("latest_timestamp"),
         "sample_messages": info.get("sample_messages", []),
+        "duplicate_messages": info.get("duplicate_messages", {}),
+        "timeline_analysis": info.get("timeline_analysis", {}),
+        "group_analysis": info.get("group_analysis", {}),
         "detail": info.get("detail", ""),
     }
 
@@ -82,7 +88,7 @@ def _is_chat_export_file(path: Path) -> bool:
     return False
 
 
-def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
+def scan_tree(source: str | Path, max_files: int = 20000, enable_ai: bool = True) -> dict[str, Any]:
     """Perform a read-only forensic inventory of a directory tree."""
     if source is None or not str(source).strip():
         raise ValueError("Source must be an existing directory")
@@ -120,7 +126,16 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
             visited += 1
             suffix = item.suffix.lower()
             name_lower = item.name.lower()
-            file_hash = sha256_file(item) if stat.st_size > 0 else "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            if stat.st_size > 0:
+                checksums = dual_checksum_file(item)
+                file_hash = checksums["sha256"]
+                file_sha512 = checksums["sha512"]
+            else:
+                file_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                file_sha512 = (
+                    "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+                    "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+                )
 
             is_backup_name = (
                 any(h in name_lower for h in BACKUP_HINTS)
@@ -146,6 +161,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
                 "modified_iso": datetime.fromtimestamp(int(stat.st_mtime), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
                 "kind": kind,
                 "sha256": file_hash,
+                "sha512": file_sha512,
                 "mime": MEDIA_MIME.get(suffix),
             }
 
@@ -156,6 +172,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
                 record["category"] = cat
                 record["corrupt"] = integrity["corrupt"]
                 record["header_valid"] = integrity["header_valid"]
+                record["signature"] = integrity["signature"]
                 record["corruption_reason"] = integrity["reason"]
                 record["timestamp_meta"] = ts_meta
                 category_counts[cat] = category_counts.get(cat, 0) + 1
@@ -165,6 +182,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
                 b_info = inspect_backup_file(item, sha256_digest=file_hash)
                 record["encrypted"] = b_info["encrypted"]
                 record["encryption_format"] = b_info["encryption_format"]
+                record["format_specification"] = b_info["format_specification"]
                 record["suspicious"] = b_info["suspicious"]
                 record["status"] = b_info["status"]
                 record["warnings"] = b_info["warnings"]
@@ -178,6 +196,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
                             "path": str(item),
                             "size": stat.st_size,
                             "sha256": file_hash,
+                            "sha512": file_sha512,
                             **sqlite_res,
                         })
 
@@ -202,21 +221,37 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
         except (OSError, PermissionError) as exc:
             errors.append(f"{item}: {str(exc)[:120]}")
 
+    # Cross-reference SQLite message_media against scanned media entries & flag orphaned media
+    linked_disk_paths: set[str] = set()
+    for db in chat_databases:
+        ml = link_chat_media(db["path"], entries)
+        db["media_links"] = ml
+        for l_item in ml.get("linked", []):
+            if l_item.get("disk_path"):
+                linked_disk_paths.add(str(l_item["disk_path"]))
+
+    for e in entries:
+        if e["kind"] == "media":
+            e["orphaned"] = bool(chat_databases and e["path"] not in linked_disk_paths)
+
     media_entries = [e for e in entries if e["kind"] == "media"]
+    orphaned_summary = detect_orphaned_media(entries, linked_disk_paths) if chat_databases else {
+        "total_media": len(media_entries),
+        "linked_count": 0,
+        "orphaned_count": 0,
+        "orphaned_files": [],
+    }
     duplicate_analysis = analyze_duplicates(media_entries)
     backup_health = generate_backup_health_report(entries, source_root=str(root))
 
-    # Cross-reference SQLite message_media against scanned media entries
-    for db in chat_databases:
-        db["media_links"] = link_chat_media(db["path"], entries)
-
     report: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "timestamp": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "source": str(root),
         "files_scanned": visited,
         "media_count": len(media_entries),
         "corrupt_media_count": sum(1 for e in media_entries if e.get("corrupt")),
+        "orphaned_media_count": orphaned_summary["orphaned_count"],
         "timestamp_drift_count": sum(
             1 for e in media_entries if e.get("timestamp_meta", {}).get("timestamp_drift_detected")
         ),
@@ -225,6 +260,7 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
         "chat_export_count": len(chat_exports),
         "duplicates": [paths for paths in hashes.values() if len(paths) > 1],
         "duplicate_analysis": duplicate_analysis,
+        "orphaned_media_analysis": orphaned_summary,
         "backup_health": backup_health,
         "chat_databases": chat_databases,
         "chat_exports": chat_exports,
@@ -232,4 +268,8 @@ def scan_tree(source: str | Path, max_files: int = 20000) -> dict[str, Any]:
         "entries": entries,
     }
     report["recovery_estimate"] = estimate_recovery_readiness(report)
+    report["forensic_ai"] = generate_forensic_findings(report, enabled=enable_ai)
     return report
+
+
+__all__ = ["scan_tree", "inspect_sqlite", "sha256_file", "is_within", "MEDIA_MIME", "MEDIA_EXTENSIONS"]

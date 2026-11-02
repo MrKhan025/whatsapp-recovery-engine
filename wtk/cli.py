@@ -1,9 +1,10 @@
-"""Command-Line Interface (`wtk/cli.py`) for WhatsApp Recovery Engine – v1.0."""
+"""Command-Line Interface (`wtk/cli.py`) for WhatsApp Recovery Engine v2.0."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -11,18 +12,22 @@ import uvicorn
 
 from .adb import get_android_guidance
 from .chat_analyzer import compare_chat_databases, inspect_chat_database, parse_chat_export
-from .engine import compare_snapshots, load_snapshot, verified_export
+from .engine import compare_snapshots, load_snapshot, preview_recovery_operation, verified_export
 from .reports import generate_all_scan_reports, write_json, write_verification_certificate
 from .sample_bootstrap import ensure_sample_data
 from .scanner import scan_tree
 from .security import audit_dependencies
 
 
-def main() -> None:
-    """Main CLI entry point for `python -m wtk`."""
+def main(argv: list[str] | None = None) -> None:
+    """Main CLI entry point for `python main.py` and `python -m wtk`."""
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if not args_list:
+        args_list = ["serve"]
+
     parser = argparse.ArgumentParser(
-        prog="wtk",
-        description="WhatsApp Recovery Engine (v1.0) – Offline backup analysis, chat inspection, media discovery & SHA-256 verification",
+        prog="python main.py",
+        description="WhatsApp Recovery Engine v2.0 — Professional Digital Forensics & Backup Recovery Platform",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -44,27 +49,29 @@ def main() -> None:
     exp = sub.add_parser("parse-export", help="Parse a TXT, JSON, or HTML chat export")
     exp.add_argument("path", help="Path to chat export file")
 
-    ver = sub.add_parser("verify-export", help="Copy files safely and verify SHA-256 checksums")
+    ver = sub.add_parser("verify-export", help="Copy files safely and verify SHA-256 and SHA-512 checksums")
     ver.add_argument("--source", required=True, help="Source root directory")
     ver.add_argument("--destination", required=True, help="Destination directory outside source")
+    ver.add_argument("--preview", action="store_true", help="Preview operation without copying bytes")
     ver.add_argument("files", nargs="+", help="Files to copy and verify")
 
     sub.add_parser("adb-check", help="Check connected ADB devices and Android guidance")
     sub.add_parser("security-audit", help="Run local security and dependency posture check")
     sub.add_parser("init-sample", help="Generate synthetic zero-PII sample data in ./sample-data")
 
-    srv = sub.add_parser("serve", help="Start the local responsive web dashboard")
+    srv = sub.add_parser("serve", help="Start the local responsive web dashboard (default)")
     srv.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     srv.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
 
-    args = parser.parse_args()
+    args = parser.parse_args(args_list)
+    sample_dir = Path(__file__).resolve().parent.parent / "sample-data"
 
     if args.command == "init-sample":
-        root = ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
+        root = ensure_sample_data(sample_dir)
         print(f"Sample data initialized at: {root}")
 
     elif args.command == "scan":
-        ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
+        ensure_sample_data(sample_dir)
         report = scan_tree(args.source)
         out = Path(args.output)
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -89,9 +96,12 @@ def main() -> None:
         print(json.dumps(parse_chat_export(Path(args.path)), indent=2))
 
     elif args.command == "verify-export":
-        res = verified_export(args.source, args.files, args.destination)
-        certs = write_verification_certificate(res, Path(args.destination))
-        print(json.dumps({**res, "certificates": {k: str(v) for k, v in certs.items()}}, indent=2))
+        if args.preview:
+            print(json.dumps(preview_recovery_operation(args.source, args.files, args.destination), indent=2))
+        else:
+            res = verified_export(args.source, args.files, args.destination)
+            certs = write_verification_certificate(res, Path(args.destination))
+            print(json.dumps({**res, "certificates": {k: str(v) for k, v in certs.items()}}, indent=2))
 
     elif args.command == "adb-check":
         print(json.dumps(get_android_guidance(), indent=2))
@@ -100,7 +110,12 @@ def main() -> None:
         print(json.dumps(audit_dependencies(), indent=2))
 
     elif args.command == "serve":
-        ensure_sample_data(Path(__file__).resolve().parent.parent / "sample-data")
+        ensure_sample_data(sample_dir)
+        print("==========================================================")
+        print("  WhatsApp Recovery Engine v2.0 — Forensic Dashboard      ")
+        print(f"  URL: http://{args.host}:{args.port}                     ")
+        print("  Press Ctrl+C to stop the server.                        ")
+        print("==========================================================")
         uvicorn.run("wtk.api:app", host=args.host, port=args.port, reload=False)
 
 

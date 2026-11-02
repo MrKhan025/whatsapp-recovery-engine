@@ -1,13 +1,11 @@
-"""Smart Backup Analyzer (`wtk/backup_analyzer.py`).
+"""Backup Intelligence & Health Analyzer (`wtk/backup_analyzer.py`).
 
-Capabilities:
-- Discover accessible WhatsApp backup files (`.crypt12`, `.crypt14`, `.crypt15`, `.db`, `msgstore*`, `wa.db*`)
-- Identify encrypted `.crypt*` backups without decrypting them
-- Detect backup file sizes, timestamps, embedded filename dates, and SHA-256 hashes
-- Detect suspiciously small or empty backup files
-- Compare two or more backup snapshots chronologically
-- Inspect accessible SQLite databases
-- Generate a comprehensive Backup Health Report
+Implements:
+- CRYPT12, CRYPT14, and CRYPT15 format identification and specification metadata
+- Backup size, timestamp, embedded date, and integrity analysis
+- Detection of suspiciously small or empty backup files
+- Accessible SQLite database inspection
+- Comprehensive Backup Health Report generation
 """
 
 from __future__ import annotations
@@ -18,17 +16,17 @@ from pathlib import Path
 from typing import Any
 
 from .chat_analyzer import inspect_chat_database, is_sqlite_file
+from .decryptor import FORMAT_SPECS, identify_crypt_format, inspect_crypt_header
 
 CRYPT_PATTERN = re.compile(r"\.crypt(?P<ver>\d{1,2})$", re.IGNORECASE)
 DATE_IN_NAME_PATTERN = re.compile(r"(?P<date>20\d{2}-\d{2}-\d{2})")
 
-# Minimum reasonable byte threshold for a non-empty encrypted WhatsApp backup header + payload
 MIN_HEALTHY_CRYPT_BYTES = 256
 MIN_HEALTHY_SQLITE_BYTES = 1024
 
 
 def inspect_backup_file(path: Path | str, sha256_digest: str | None = None) -> dict[str, Any]:
-    """Analyze a single backup or database candidate without decrypting `.crypt*` files."""
+    """Analyze a single backup or database candidate with format-specific CRYPT12/14/15 metadata."""
     p = Path(path)
     stat = p.stat()
     size = stat.st_size
@@ -40,9 +38,9 @@ def inspect_backup_file(path: Path | str, sha256_digest: str | None = None) -> d
     backup_date_hint = date_match.group("date") if date_match else None
 
     is_encrypted = bool(crypt_match or ".crypt" in name_lower)
-    crypt_version = f"crypt{crypt_match.group('ver')}" if crypt_match else (
-        "crypt_unknown" if ".crypt" in name_lower else None
-    )
+    crypt_version = identify_crypt_format(p) if is_encrypted else None
+    crypt_spec = FORMAT_SPECS.get(crypt_version or "", None) if is_encrypted else None
+    crypt_hdr = inspect_crypt_header(p) if is_encrypted else None
 
     suspicious = False
     warnings: list[str] = []
@@ -81,6 +79,8 @@ def inspect_backup_file(path: Path | str, sha256_digest: str | None = None) -> d
         "sha256": sha256_digest or (sqlite_info.get("sha256") if sqlite_info else ""),
         "encrypted": is_encrypted,
         "encryption_format": crypt_version,
+        "format_specification": crypt_spec,
+        "crypt_header": crypt_hdr,
         "decryption_attempted": False,
         "is_sqlite": bool(sqlite_info and sqlite_info.get("is_sqlite")),
         "sqlite": sqlite_info,
@@ -102,6 +102,11 @@ def generate_backup_health_report(entries: list[dict[str, Any]], source_root: st
     healthy_sqlite = [e for e in sqlite_backups if e["sqlite"].get("ok")]
     corrupt_sqlite = [e for e in sqlite_backups if not e["sqlite"].get("ok")]
     suspicious_files = [e for e in backup_entries if e.get("suspicious") or e.get("size", 0) == 0]
+
+    format_counts: dict[str, int] = {"crypt12": 0, "crypt14": 0, "crypt15": 0, "sqlite": len(sqlite_backups)}
+    for e in encrypted_backups:
+        fmt = str(e.get("encryption_format") or "crypt_other")
+        format_counts[fmt] = format_counts.get(fmt, 0) + 1
 
     warnings: list[str] = []
     if not backup_entries:
@@ -133,6 +138,7 @@ def generate_backup_health_report(entries: list[dict[str, Any]], source_root: st
         "health_status": health_status,
         "total_backup_files": len(backup_entries),
         "encrypted_crypt_count": len(encrypted_backups),
+        "format_breakdown": format_counts,
         "accessible_sqlite_count": len(sqlite_backups),
         "healthy_sqlite_count": len(healthy_sqlite),
         "corrupt_sqlite_count": len(corrupt_sqlite),
@@ -148,8 +154,8 @@ def generate_backup_health_report(entries: list[dict[str, Any]], source_root: st
         "backups": backup_entries,
         "warnings": warnings,
         "limitations": [
-            "Encrypted WhatsApp backups (.crypt12/.crypt14/.crypt15) are cataloged by metadata and SHA-256 only; they are never decrypted.",
-            "Restoring encrypted .crypt* backups requires the official WhatsApp app with the registered phone number or the user's own legitimate 64-byte key.",
-            "SQLite integrity checks verify structural page/B-tree consistency but cannot recover purged pages unless an older snapshot exists.",
+            "CRYPT12 (fixed 67B header), CRYPT14 (protobuf header), and CRYPT15 (HKDF-SHA256 E2EE key) have distinct binary layouts and key derivations.",
+            "Encrypted backups are never brute-forced or decrypted without a user-authorized key.",
+            "SQLite integrity checks verify page/B-tree consistency but cannot reconstruct overwritten pages without an older snapshot.",
         ],
     }
