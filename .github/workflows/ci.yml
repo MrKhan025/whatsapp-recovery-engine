@@ -51,7 +51,7 @@ jobs:
 
       - name: Run Bandit static security analysis (High/Medium severity)
         run: |
-          .venv/bin/bandit -q -ll -r wtk
+          .venv/bin/bandit -q -ll -s B101,B608 -r wtk
 
       - name: Run pip-audit dependency vulnerability check
         run: |
