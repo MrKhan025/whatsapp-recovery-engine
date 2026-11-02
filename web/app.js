@@ -1,6 +1,7 @@
 let latestReport = null;
 let latestEntries = [];
 let samplePaths = { v1: './sample-data/snapshot_v1', v2: './sample-data/snapshot_v2' };
+let activeSession = null;
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -28,7 +29,7 @@ function setProgress(active, label = 'Processing…') {
   if (text) text.textContent = label;
 }
 
-// Tab Navigation
+// 12-Tab Navigation
 $$('.nav-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     $$('.nav-btn').forEach((b) => b.classList.remove('active'));
@@ -48,19 +49,17 @@ $('#themeToggle').addEventListener('click', () => {
   html.setAttribute('data-theme', next);
 });
 
-// Initialize Status, ADB, and Security Posture
 async function initStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
     if (d.sample_snapshot_v1) samplePaths.v1 = d.sample_snapshot_v1;
     if (d.sample_snapshot_v2) samplePaths.v2 = d.sample_snapshot_v2;
-    if (!$('#source').value) {
-      $('#source').value = samplePaths.v2;
-    }
+    if (!$('#source').value) $('#source').value = samplePaths.v2;
     renderAdbStatus(d.adb);
     renderSecurityStatus(d.security);
     await loadSnapshots();
+    await refreshAuditLog();
   } catch (err) {
     setMessage('Unable to reach local API: ' + err.message, true);
   }
@@ -76,19 +75,24 @@ $('#loadSampleV1').addEventListener('click', () => {
   $('#scanForm').requestSubmit();
 });
 
-// Directory Scan
 $('#scanForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const sourcePath = $('#source').value.trim();
   if (!sourcePath) return;
-  setProgress(true, 'Scanning accessible files in read-only mode…');
+  const enableAi = $('#enableAiToggle') ? $('#enableAiToggle').checked : true;
+  setProgress(true, 'Scanning accessible files and computing SHA-256 & SHA-512…');
   setMessage('Scanning accessible files…');
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (activeSession) {
+      headers['X-WRE-Token'] = activeSession.token;
+      headers['X-CSRF-Token'] = activeSession.csrf_token;
+    }
     const r = await fetch('/api/scan', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: sourcePath }),
+      headers,
+      body: JSON.stringify({ source: sourcePath, enable_ai: enableAi }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Scan failed');
@@ -96,26 +100,29 @@ $('#scanForm').addEventListener('submit', async (e) => {
     latestReport = d;
     latestEntries = d.entries || [];
 
-    // KPI Cards
     $('#files').textContent = d.files_scanned || 0;
     $('#media').textContent = d.media_count || 0;
     $('#backups').textContent = d.backup_candidates || 0;
     $('#dupes').textContent = (d.duplicates || []).length;
 
-    // Category Counts
     const cats = d.category_counts || {};
     ['photos', 'videos', 'voice_notes', 'audio', 'documents', 'stickers', 'gifs', 'thumbnails'].forEach((c) => {
       const el = $(`#cat-${c}`);
       if (el) el.textContent = cats[c] || 0;
     });
 
+    renderCategoryBarChart(cats);
     renderEstimator(d.recovery_estimate);
     renderHistory(d.history || []);
+    renderWorkspaceAi(d.forensic_ai);
     renderChatTab(d);
     renderBackupTab(d);
     renderEntries();
+    renderTimelineTab(d);
+    renderEvidenceTab(d.evidence_summary);
     renderDuplicatesTab(d.duplicate_analysis);
     await loadSnapshots();
+    await refreshAuditLog();
 
     setMessage(`Scan complete: ${d.files_scanned} files analyzed (${(d.errors || []).length} warnings).`);
   } catch (err) {
@@ -124,6 +131,21 @@ $('#scanForm').addEventListener('submit', async (e) => {
     setProgress(false);
   }
 });
+
+function renderCategoryBarChart(cats) {
+  const box = $('#categoryChart');
+  if (!box) return;
+  const entries = Object.entries(cats || {});
+  const maxVal = Math.max(1, ...entries.map(([, v]) => v));
+  const bars = entries.map(([k, v], i) => {
+    const w = Math.max(6, Math.round((v / maxVal) * 220));
+    const y = 16 + i * 22;
+    return `<text x="6" y="${y + 11}" fill="#9fb3cd" font-size="11">${k}</text>` +
+           `<rect x="95" y="${y}" width="${w}" height="14" rx="4" fill="#3be2b0"/>` +
+           `<text x="${102 + w}" y="${y + 11}" fill="#eef5ff" font-size="11" font-weight="bold">${v}</text>`;
+  }).join('');
+  box.innerHTML = `<svg width="100%" height="195" viewBox="0 0 360 195">${bars}</svg>`;
+}
 
 function renderEstimator(est) {
   if (!est) return;
@@ -134,6 +156,7 @@ function renderEstimator(est) {
 
   const fillList = (sel, items, fallback) => {
     const ul = $(sel);
+    if (!ul) return;
     ul.replaceChildren();
     (items && items.length ? items : [fallback]).forEach((txt) => {
       const li = document.createElement('li');
@@ -141,11 +164,70 @@ function renderEstimator(est) {
       ul.append(li);
     });
   };
-
   fillList('#estEvidence', est.evidence, 'No supporting evidence found.');
   fillList('#estMissing', est.missing_requirements, 'No missing requirements flagged.');
   fillList('#estSteps', est.recommended_next_steps, 'Proceed to inspect or export files.');
 }
+
+function renderWorkspaceAi(ai) {
+  if (!ai) return;
+  const vList = $('#aiVerifiedList');
+  const iList = $('#aiInferredList');
+  if (vList) {
+    vList.replaceChildren();
+    (ai.verified_findings || []).forEach((f) => {
+      const li = document.createElement('li');
+      li.textContent = `[VERIFIED] ${f.statement}`;
+      vList.append(li);
+    });
+  }
+  if (iList) {
+    iList.replaceChildren();
+    const obs = [...(ai.inferred_observations || []).map((o) => `[INFERRED] ${o.statement}`), ...(ai.recommendations || []).map((r) => `[RECOMMENDED] ${r}`)];
+    (obs.length ? obs : ['No additional inferred anomalies detected.']).forEach((txt) => {
+      const li = document.createElement('li');
+      li.textContent = txt;
+      iList.append(li);
+    });
+  }
+}
+
+$('#runAiAnalysisBtn').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/ai/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: $('#enableAiToggle').checked }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'AI analysis failed');
+    renderWorkspaceAi(d.forensic_findings);
+  } catch (err) {
+    setMessage(err.message, true);
+  }
+});
+
+$('#previewExportBtn').addEventListener('click', async () => {
+  const paths = $$('.pick:checked').map((x) => x.value);
+  const dest = $('#destination').value.trim() || '/tmp/whatsapp-verified-export';
+  const box = $('#exportPreviewOutput');
+  if (!paths.length) {
+    box.textContent = 'Select at least one media item in the Media Recovery tab first.';
+    return;
+  }
+  try {
+    const r = await fetch('/api/export/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, destination: dest }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Preview failed');
+    box.textContent = `Preview Ready: ${d.ready_count} of ${d.total_requested} file(s) eligible (${d.total_bytes_to_copy} bytes total) -> Destination: ${d.destination}`;
+  } catch (err) {
+    box.textContent = err.message;
+  }
+});
 
 function renderHistory(historyList) {
   const body = $('#historyBody');
@@ -179,28 +261,20 @@ function renderChatTab(report) {
       const title = document.createElement('h3');
       title.textContent = `${db.name} (${db.format_type}) — Integrity: ${db.integrity.toUpperCase()}`;
       const meta = document.createElement('p');
-      meta.textContent = `Tables: ${(db.tables || []).join(', ') || 'none'} | Messages: ${db.message_count || 0} | Range: ${db.earliest_timestamp || 'N/A'} to ${db.latest_timestamp || 'N/A'}`;
+      const walFrames = (db.wal_diagnostics && db.wal_diagnostics.uncheckpointed_frames) || 0;
+      meta.textContent = `Tables: ${(db.tables || []).join(', ')} | Messages: ${db.message_count || 0} | Uncheckpointed WAL Frames: ${walFrames} | Range: ${db.earliest_timestamp || 'N/A'} to ${db.latest_timestamp || 'N/A'}`;
       card.append(title, meta);
       wrap.append(card);
     });
   }
 
-  // Populate default DB comparison paths if sample data is available
-  if (!$('#oldDbPath').value && samplePaths.v1) {
-    $('#oldDbPath').value = `${samplePaths.v1}/Databases/msgstore.db`;
-  }
-  if (!$('#newDbPath').value && samplePaths.v2) {
-    $('#newDbPath').value = `${samplePaths.v2}/Databases/msgstore.db`;
-  }
+  if (!$('#oldDbPath').value && samplePaths.v1) $('#oldDbPath').value = `${samplePaths.v1}/Databases/msgstore.db`;
+  if (!$('#newDbPath').value && samplePaths.v2) $('#newDbPath').value = `${samplePaths.v2}/Databases/msgstore.db`;
+  if (!$('#chatContactFile').value && samplePaths.v2) $('#chatContactFile').value = `${samplePaths.v2}/Exports/contacts.vcf`;
 
-  // Collect all preview messages from DBs and exports
   const allMsgs = [];
-  dbs.forEach((db) => {
-    (db.sample_messages || []).forEach((m) => allMsgs.push({ ...m, source: db.name }));
-  });
-  (report.chat_exports || []).forEach((exp) => {
-    (exp.messages || []).forEach((m) => allMsgs.push({ ...m, source: exp.name }));
-  });
+  dbs.forEach((db) => (db.sample_messages || []).forEach((m) => allMsgs.push({ ...m, source: db.name })));
+  (report.chat_exports || []).forEach((exp) => (exp.messages || []).forEach((m) => allMsgs.push({ ...m, source: exp.name })));
   renderChatMessagesTable(allMsgs);
 }
 
@@ -213,13 +287,8 @@ function renderChatMessagesTable(messages) {
   }
   messages.slice(0, 200).forEach((m) => {
     const tr = document.createElement('tr');
-    [
-      m.id || '-',
-      m.timestamp || '-',
-      m.sender || 'Participant',
-      m.text || '',
-      m.sha256 || '',
-    ].forEach((v, i) => {
+    const senderLabel = m.contact_name && m.contact_name !== m.sender ? `${m.contact_name} (${m.sender})` : (m.sender || 'Participant');
+    [m.id || '-', m.timestamp || '-', senderLabel, m.text || '', m.sha256 || ''].forEach((v, i) => {
       const td = document.createElement('td');
       td.textContent = v;
       if (i === 4) td.className = 'hash';
@@ -237,6 +306,7 @@ $('#chatSearchBtn').addEventListener('click', async () => {
       body: JSON.stringify({
         query: $('#chatSearchQuery').value,
         sender: $('#chatSearchSender').value,
+        contact_file: $('#chatContactFile').value,
       }),
     });
     const d = await r.json();
@@ -247,6 +317,28 @@ $('#chatSearchBtn').addEventListener('click', async () => {
   }
 });
 
+$$('.chat-exp-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const fmt = btn.getAttribute('data-fmt');
+    try {
+      const r = await fetch('/api/chat/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          format: fmt,
+          query: $('#chatSearchQuery').value,
+          sender: $('#chatSearchSender').value,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Chat export failed');
+      window.open(d.download_url, '_blank');
+    } catch (err) {
+      setMessage(err.message, true);
+    }
+  });
+});
+
 $('#compareDbBtn').addEventListener('click', async () => {
   const out = $('#dbCompareOutput');
   out.textContent = 'Comparing SQLite databases…';
@@ -254,10 +346,7 @@ $('#compareDbBtn').addEventListener('click', async () => {
     const r = await fetch('/api/chat/compare-db', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        old_db: $('#oldDbPath').value,
-        new_db: $('#newDbPath').value,
-      }),
+      body: JSON.stringify({ old_db: $('#oldDbPath').value, new_db: $('#newDbPath').value }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'Database comparison failed');
@@ -279,7 +368,7 @@ $('#compareDbBtn').addEventListener('click', async () => {
       ul.className = 'clean-list';
       d.missing_in_new.forEach((m) => {
         const li = document.createElement('li');
-        li.textContent = `[${m.timestamp}] ${m.sender}: ${m.text}`;
+        li.textContent = `[ID ${m.id} • ${m.timestamp}] ${m.sender}: ${m.text}`;
         ul.append(li);
       });
       out.append(ul);
@@ -310,8 +399,8 @@ function renderBackupTab(report) {
   }
   backups.forEach((b) => {
     const tr = document.createElement('tr');
-    const fmt = b.encrypted ? `Encrypted (${b.encryption_format})` : (b.sqlite && b.sqlite.supported ? `SQLite (${b.sqlite.format_type})` : 'File');
-    [b.name, fmt, `${b.size} bytes`, b.modified_iso || '-', b.status || 'ok', b.sha256].forEach((val, idx) => {
+    const specName = b.format_specification ? `${b.encryption_format.toUpperCase()} (${b.format_specification.header_type})` : (b.encrypted ? `Encrypted (${b.encryption_format})` : (b.sqlite && b.sqlite.supported ? `SQLite (${b.sqlite.format_type})` : 'File'));
+    [b.name, specName, `${b.size} bytes`, b.modified_iso || '-', b.status || 'ok', b.sha256].forEach((val, idx) => {
       const td = document.createElement('td');
       td.textContent = val;
       if (idx === 5) td.className = 'hash';
@@ -327,6 +416,7 @@ function renderEntries() {
   const minS = $('#minSizeFilter').value ? parseInt($('#minSizeFilter').value, 10) : null;
   const maxS = $('#maxSizeFilter').value ? parseInt($('#maxSizeFilter').value, 10) : null;
   const onlyCorrupt = $('#onlyCorruptFilter').checked;
+  const onlyOrphaned = $('#onlyOrphanedFilter') ? $('#onlyOrphanedFilter').checked : false;
 
   const body = $('#entries');
   body.replaceChildren();
@@ -338,6 +428,7 @@ function renderEntries() {
     if (minS !== null && x.size < minS) return false;
     if (maxS !== null && x.size > maxS) return false;
     if (onlyCorrupt && !x.corrupt) return false;
+    if (onlyOrphaned && !x.orphaned) return false;
     return true;
   });
 
@@ -357,8 +448,9 @@ function renderEntries() {
     td0.append(check);
     tr.append(td0);
 
-    const integrityLabel = item.corrupt ? `CORRUPT (${item.corruption_reason || 'invalid'})` : 'Intact';
-    [item.category || item.mime || 'media', item.name, `${item.size} bytes`, integrityLabel, item.sha256].forEach((v, i) => {
+    const recDate = (item.timestamp_meta && item.timestamp_meta.reconstructed_date) || '';
+    const sigLabel = item.corrupt ? `CORRUPT (${item.corruption_reason || 'invalid'})` : `Intact (${item.signature || 'ok'}${recDate ? ' • ' + recDate : ''})`;
+    [item.category || item.mime || 'media', item.name, `${item.size} bytes`, sigLabel, item.sha256].forEach((v, i) => {
       const td = document.createElement('td');
       td.textContent = v;
       if (i === 4) td.className = 'hash';
@@ -381,19 +473,16 @@ function renderEntries() {
   });
 }
 
-['#filter', '#mediaCategoryFilter', '#minSizeFilter', '#maxSizeFilter', '#onlyCorruptFilter'].forEach((sel) => {
+['#filter', '#mediaCategoryFilter', '#minSizeFilter', '#maxSizeFilter', '#onlyCorruptFilter', '#onlyOrphanedFilter'].forEach((sel) => {
   const el = $(sel);
-  if (el) el.addEventListener('input', renderEntries);
-  if (el) el.addEventListener('change', renderEntries);
+  if (el) {
+    el.addEventListener('input', renderEntries);
+    el.addEventListener('change', renderEntries);
+  }
 });
 
-$('#selectAllMediaBtn').addEventListener('click', () => {
-  $$('.pick').forEach((c) => { c.checked = true; });
-});
-
-$('#clearMediaSelectionBtn').addEventListener('click', () => {
-  $$('.pick').forEach((c) => { c.checked = false; });
-});
+$('#selectAllMediaBtn').addEventListener('click', () => { $$('.pick').forEach((c) => { c.checked = true; }); });
+$('#clearMediaSelectionBtn').addEventListener('click', () => { $$('.pick').forEach((c) => { c.checked = false; }); });
 
 async function showPreview(item) {
   const box = $('#preview');
@@ -432,6 +521,84 @@ async function showPreview(item) {
 $('#closePreview').addEventListener('click', () => {
   $('#preview').hidden = true;
   $('#previewBody').replaceChildren();
+});
+
+function renderTimelineTab(report) {
+  const chartBox = $('#timelineChartBox');
+  const gapsBox = $('#timelineGapsBox');
+  if (!chartBox || !gapsBox) return;
+
+  const dbs = report.chat_databases || [];
+  const tAnalysis = (dbs[0] && dbs[0].timeline_analysis) || {};
+  const daily = tAnalysis.daily_activity || [];
+  if (!daily.length) {
+    chartBox.innerHTML = '<p class="empty">No timestamped chat records available for timeline chart.</p>';
+  } else {
+    const maxC = Math.max(1, ...daily.map((d) => d.count));
+    const bars = daily.map((d, idx) => {
+      const w = Math.max(12, Math.round((d.count / maxC) * 240));
+      const y = 14 + idx * 26;
+      return `<text x="8" y="${y + 13}" fill="#9fb3cd" font-size="11">${d.date}</text>` +
+             `<rect x="105" y="${y}" width="${w}" height="16" rx="4" fill="#6fb3ff"/>` +
+             `<text x="${112 + w}" y="${y + 13}" fill="#eef5ff" font-size="11">${d.count} msg(s)</text>`;
+    }).join('');
+    chartBox.innerHTML = `<svg width="100%" height="${Math.max(80, daily.length * 30)}" viewBox="0 0 420 ${Math.max(80, daily.length * 30)}">${bars}</svg>`;
+  }
+
+  gapsBox.replaceChildren();
+  const gaps = tAnalysis.gaps || [];
+  if (!gaps.length) {
+    gapsBox.innerHTML = '<p class="empty">No anomalous conversation gaps detected.</p>';
+  } else {
+    const ul = document.createElement('ul');
+    ul.className = 'clean-list';
+    gaps.forEach((g) => {
+      const li = document.createElement('li');
+      li.textContent = `Gap of ${g.duration_hours} hours (${g.duration_seconds}s) between message #${g.from_message_id} (${g.gap_start}) and message #${g.to_message_id} (${g.gap_end}).`;
+      ul.append(li);
+    });
+    gapsBox.append(ul);
+  }
+}
+
+function renderEvidenceTab(evSummary) {
+  const tbody = $('#evidenceTableBody');
+  if (!tbody || !evSummary) return;
+  tbody.replaceChildren();
+  const items = evSummary.evidence_items || [];
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No evidence items registered yet.</td></tr>';
+    return;
+  }
+  items.forEach((item) => {
+    const tr = document.createElement('tr');
+    [item.evidence_id, item.name, item.category, item.acquired_at, item.sha256, (item.sha512 || '').slice(0, 24) + '…'].forEach((v, idx) => {
+      const td = document.createElement('td');
+      td.textContent = v;
+      if (idx === 4 || idx === 5) td.className = 'hash';
+      tr.append(td);
+    });
+    tbody.append(tr);
+  });
+}
+
+$('#generateManifestBtn').addEventListener('click', async () => {
+  const key = $('#manifestSigningKey').value.trim() || null;
+  const box = $('#manifestOutputBox');
+  try {
+    const r = await fetch('/api/evidence/manifest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ signing_key: key }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Manifest generation failed');
+    box.hidden = false;
+    box.textContent = `Manifest ${d.manifest_id} (${d.verification_mode}) — SHA-256: ${d.manifest_sha256}${d.signature ? ' | HMAC Signature: ' + d.signature : ''}`;
+  } catch (err) {
+    box.hidden = false;
+    box.textContent = err.message;
+  }
 });
 
 function renderDuplicatesTab(dupAnalysis) {
@@ -473,9 +640,7 @@ async function loadSnapshots() {
       sel.append(o);
     });
   }
-  if ((d.snapshots || []).length > 1) {
-    $('#new').selectedIndex = d.snapshots.length - 1;
-  }
+  if ((d.snapshots || []).length > 1) $('#new').selectedIndex = d.snapshots.length - 1;
 }
 
 $('#compare').addEventListener('click', async () => {
@@ -514,8 +679,8 @@ $('#export').addEventListener('click', async () => {
     $('#exportmsg').textContent = 'Enter a safe destination folder outside the scanned directory.';
     return;
   }
-  setProgress(true, 'Copying files and verifying pre/post SHA-256 checksums…');
-  $('#exportmsg').textContent = 'Copying and verifying SHA-256…';
+  setProgress(true, 'Copying files and verifying dual SHA-256 & SHA-512 checksums…');
+  $('#exportmsg').textContent = 'Copying and verifying SHA-256/SHA-512…';
   try {
     const r = await fetch('/api/export', {
       method: 'POST',
@@ -528,7 +693,7 @@ $('#export').addEventListener('click', async () => {
 
     const certBox = $('#verificationCertBox');
     certBox.hidden = false;
-    $('#certMeta').textContent = `Certificate ID: ${d.certificate_id} | Timestamp: ${d.timestamp} | Manifest SHA-256: ${d.manifest_sha256}`;
+    $('#certMeta').textContent = `Certificate ID: ${d.certificate_id} | Mode: ${d.verification_mode} | Manifest SHA-256: ${d.manifest_sha256}`;
 
     const tbody = $('#verificationTableBody');
     tbody.replaceChildren();
@@ -538,7 +703,7 @@ $('#export').addEventListener('click', async () => {
         item.name || item.source,
         item.source_sha256 || '-',
         item.destination_sha256 || '-',
-        item.verified ? 'VERIFIED OK' : `FAILED (${item.error || 'Mismatch'})`,
+        item.verified ? 'VERIFIED OK (SHA-256 + SHA-512)' : `FAILED (${item.error || 'Mismatch'})`,
       ].forEach((val, idx) => {
         const td = document.createElement('td');
         td.textContent = val;
@@ -563,6 +728,19 @@ function renderAdbStatus(adb) {
   const p2 = document.createElement('p');
   p2.textContent = adb.message || '';
   box.append(p1, p2);
+
+  const fillPaths = (sel, items) => {
+    const ul = $(sel);
+    if (!ul) return;
+    ul.replaceChildren();
+    (items || []).forEach((p) => {
+      const li = document.createElement('li');
+      li.textContent = p;
+      ul.append(li);
+    });
+  };
+  fillPaths('#adbWaPaths', adb.known_whatsapp_paths);
+  fillPaths('#adbW4bPaths', adb.known_whatsapp_business_paths);
 }
 
 function renderSecurityStatus(sec) {
@@ -573,11 +751,11 @@ function renderSecurityStatus(sec) {
   ul.className = 'clean-list';
   [
     `Local-Only Processing: ${sec.local_only_processing}`,
+    `Loopback Default: ${sec.loopback_only_default}`,
     `Telemetry Enabled: ${sec.telemetry_enabled}`,
-    `Cloud Upload Enabled: ${sec.cloud_upload_enabled}`,
     `Read-Only Source Scanning: ${sec.read_only_source_scanning}`,
-    `Symlink Protection: ${sec.symlink_protection_enabled}`,
-    `Path Traversal Protection: ${sec.path_traversal_protection_enabled}`,
+    `Encrypted Temp Storage: ${sec.encrypted_temp_storage_enabled}`,
+    `Secret-Free Audit Logging: ${sec.secret_free_audit_logging}`,
     `Dependencies Pinned & Audited: ${sec.dependencies_checked}`,
   ].forEach((item) => {
     const li = document.createElement('li');
@@ -587,9 +765,32 @@ function renderSecurityStatus(sec) {
   box.append(ul);
 }
 
+async function refreshAuditLog() {
+  const tbody = $('#auditLogBody');
+  if (!tbody) return;
+  const r = await fetch('/api/audit-log');
+  const d = await r.json();
+  tbody.replaceChildren();
+  (d.events || []).slice(0, 20).forEach((ev) => {
+    const tr = document.createElement('tr');
+    [ev.timestamp, ev.action, ev.status].forEach((val) => {
+      const td = document.createElement('td');
+      td.textContent = val;
+      tr.append(td);
+    });
+    tbody.append(tr);
+  });
+}
+
+$('#issueSessionBtn').addEventListener('click', async () => {
+  const r = await fetch('/api/auth/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'dashboard-operator' }) });
+  activeSession = await r.json();
+  setMessage(`Session token issued (expires at ${activeSession.expires_at}). CSRF protection active.`);
+  await refreshAuditLog();
+});
+
 $('#refreshAdbBtn').addEventListener('click', initStatus);
 
-// Multi-language Switcher (English, Hindi, Urdu + RTL)
 $('#lang').addEventListener('change', async (e) => {
   const t = await fetch('/api/i18n/' + e.target.value).then((r) => r.json());
   document.documentElement.setAttribute('dir', t.dir || 'ltr');
