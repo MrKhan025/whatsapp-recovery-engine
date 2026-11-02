@@ -1,13 +1,36 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "whatsapp-recovery-engine"
-version = "1.0.0"
-description = "Offline-first WhatsApp backup analysis, chat inspection, media discovery, SHA-256 verification, and forensic reporting platform"
+version = "2.0.0"
+description = "Professional, offline-first WhatsApp digital forensics, backup intelligence, media recovery, and verification platform."
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["fastapi>=0.110,<1.0", "uvicorn>=0.27,<1.0", "reportlab>=4.0,<6.0"]
+license = {text = "MIT"}
+authors = [
+  {name = "MrKhan025"}
+]
+dependencies = [
+  "fastapi>=0.110,<1.0",
+  "uvicorn>=0.29,<1.0",
+  "pydantic>=2.6,<3.0"
+]
+
+[project.optional-dependencies]
+crypto = [
+  "cryptography>=42.0,<45.0",
+  "Pillow>=10.0,<12.0"
+]
+dev = [
+  "pytest>=8.0,<9.0",
+  "httpx>=0.27,<1.0",
+  "bandit>=1.7,<2.0",
+  "pip-audit>=2.7,<3.0",
+  "ruff>=0.4,<1.0",
+  "mypy>=1.10,<2.0"
+]
 
 [project.scripts]
 wtk = "wtk.cli:main"
@@ -18,3 +41,17 @@ include = ["wtk*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "-q"
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
