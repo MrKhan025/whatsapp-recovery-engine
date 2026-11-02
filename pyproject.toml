@@ -7,7 +7,7 @@ name = "whatsapp-recovery-engine"
 version = "1.0.0"
 description = "Offline-first WhatsApp backup analysis, chat inspection, media discovery, SHA-256 verification, and forensic reporting platform"
 requires-python = ">=3.10"
-dependencies = ["fastapi>=0.110,<1.0", "uvicorn>=0.27,<1.0", "reportlab>=4.0,<5.0"]
+dependencies = ["fastapi>=0.110,<1.0", "uvicorn>=0.27,<1.0", "reportlab>=4.0,<6.0"]
 
 [project.scripts]
 wtk = "wtk.cli:main"
