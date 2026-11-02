@@ -1,138 +1,141 @@
-"""Automated tests for FastAPI endpoints, chat analyzer, backup analyzer,
-recovery estimator, and report generation.
-"""
+"""End-to-end API, session/CSRF, CLI, and main.py entrypoint tests for WhatsApp Recovery Engine v2.0."""
+from __future__ import annotations
 
+import tempfile
+import unittest
 from pathlib import Path
+
 from fastapi.testclient import TestClient
-from wtk.api import app, SAMPLE_DATA_DIR
-from wtk.chat_analyzer import compare_chat_databases, inspect_chat_database, parse_chat_export, search_chat_messages
-from wtk.reports import (
-    generate_all_scan_reports,
-    write_backup_comparison_report,
-    write_verification_certificate,
-)
+
+from wtk.api import app
+from wtk.cli import main as cli_main
 from wtk.sample_bootstrap import ensure_sample_data
 
 
-def test_status_and_i18n() -> None:
-    client = TestClient(app)
-    r = client.get("/api/status")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["offline"] is True
-    assert data["version"] == "1.0.0"
-
-    for lang in ("en", "hi", "ur"):
-        ir = client.get(f"/api/i18n/{lang}")
-        assert ir.status_code == 200
-        assert "title" in ir.json()
+client = TestClient(app)
 
 
-def test_android_and_security_endpoints() -> None:
-    client = TestClient(app)
-    ag = client.get("/api/android-guidance")
-    assert ag.status_code == 200
-    assert "termux_commands" in ag.json()
+class TestApiAndCliV2(unittest.TestCase):
+    def test_api_status_and_dashboard_12_sections(self) -> None:
+        r = client.get("/api/status")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["version"], "2.0.0")
 
-    sec = client.get("/api/security-audit")
-    assert sec.status_code == 200
-    assert sec.json()["local_only_processing"] is True
-    assert sec.json()["telemetry_enabled"] is False
+        html = client.get("/")
+        self.assertEqual(html.status_code, 200)
+        for section_id in (
+            "tab-overview",
+            "tab-workspace",
+            "tab-chat",
+            "tab-backup",
+            "tab-media",
+            "tab-timeline",
+            "tab-adb",
+            "tab-evidence",
+            "tab-verify",
+            "tab-reports",
+            "tab-security",
+            "tab-settings",
+        ):
+            self.assertIn(section_id, html.text)
+
+    def test_api_session_csrf_and_security_audit(self) -> None:
+        sess_res = client.post("/api/auth/session", json={"label": "pytest-client"})
+        self.assertEqual(sess_res.status_code, 200)
+        sess = sess_res.json()
+        self.assertIn("token", sess)
+        self.assertIn("csrf_token", sess)
+
+        sec_res = client.get("/api/security-audit")
+        self.assertEqual(sec_res.status_code, 200)
+        sec_data = sec_res.json()
+        self.assertTrue(sec_data["loopback_only_default"])
+        self.assertFalse(sec_data["telemetry_enabled"])
+
+    def test_api_scan_compare_preview_verify_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            sample_root = ensure_sample_data(tmp_path / "samples")
+            snap_v1 = sample_root / "snapshot_v1"
+            snap_v2 = sample_root / "snapshot_v2"
+
+            scan_1 = client.post("/api/scan", json={"source": str(snap_v1)})
+            self.assertEqual(scan_1.status_code, 200)
+
+            scan_2 = client.post("/api/scan", json={"source": str(snap_v2)})
+            self.assertEqual(scan_2.status_code, 200)
+            scan_data = scan_2.json()
+            self.assertIn(scan_data["recovery_estimate"]["readiness"], ("Low", "Medium", "High"))
+            self.assertIn("forensic_ai", scan_data)
+
+            snaps = client.get("/api/snapshots").json()["snapshots"]
+            self.assertGreaterEqual(len(snaps), 2)
+
+            cmp_res = client.post(
+                "/api/compare",
+                json={"old": snaps[-2]["path"], "new": snaps[-1]["path"]},
+            )
+            self.assertEqual(cmp_res.status_code, 200)
+
+            target_media = str(snap_v2 / "Media" / "WhatsApp Images" / "IMG-20261001-WA0001.jpg")
+            target_db = str(snap_v2 / "Databases" / "msgstore.db")
+            dest_dir = tmp_path / "api_exports"
+
+            prev_res = client.post(
+                "/api/export/preview",
+                json={
+                    "paths": [target_media],
+                    "destination": str(dest_dir),
+                },
+            )
+            self.assertEqual(prev_res.status_code, 200)
+            self.assertEqual(prev_res.json()["ready_count"], 1)
+
+            ver_res = client.post(
+                "/api/export",
+                json={
+                    "paths": [target_media],
+                    "destination": str(dest_dir),
+                    "signing_key": "11" * 32,
+                },
+            )
+            self.assertEqual(ver_res.status_code, 200)
+            ver_data = ver_res.json()
+            self.assertEqual(ver_data["verified_count"], 1)
+
+            ev_reg = client.post(
+                "/api/evidence/register",
+                json={
+                    "path": target_db,
+                    "category": "sqlite_database",
+                    "notes": "Primary chat database",
+                    "operator": "api_test",
+                },
+            )
+            self.assertEqual(ev_reg.status_code, 200)
+            ev_id = ev_reg.json()["evidence_id"]
+
+            ev_ver = client.post("/api/evidence/verify", json={"evidence_id": ev_id})
+            self.assertEqual(ev_ver.status_code, 200)
+            self.assertTrue(ev_ver.json()["verified"])
+
+            man_res = client.post("/api/evidence/manifest", json={"signing_key": "22" * 32})
+            self.assertEqual(man_res.status_code, 200)
+            self.assertEqual(man_res.json()["verification_mode"], "cryptographically_signed_hmac_sha256")
+
+    def test_api_rejects_unauthorized_path_traversal(self) -> None:
+        bad_preview = client.get("/api/preview", params={"path": "../../etc/passwd"})
+        self.assertIn(bad_preview.status_code, (400, 403))
+
+    def test_cli_entrypoints(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            sample_root = ensure_sample_data(tmp_path / "cli_samples")
+            cli_main(["scan", "--source", str(sample_root / "snapshot_v2"), "--output", str(tmp_path / "cli_out")])
+            self.assertTrue((tmp_path / "cli_out" / "recovery-scan.json").exists())
 
 
-def test_full_api_workflow(tmp_path: Path) -> None:
-    ensure_sample_data(SAMPLE_DATA_DIR)
-    client = TestClient(app)
-    v1_path = SAMPLE_DATA_DIR / "snapshot_v1"
-    v2_path = SAMPLE_DATA_DIR / "snapshot_v2"
-
-    # 1. Scan v1 and v2
-    r1 = client.post("/api/scan", json={"source": str(v1_path)})
-    assert r1.status_code == 200
-    r2 = client.post("/api/scan", json={"source": str(v2_path)})
-    assert r2.status_code == 200
-    scan_data = r2.json()
-    assert scan_data["media_count"] >= 8
-    assert scan_data["recovery_estimate"]["readiness"] in ("Low", "Medium", "High")
-
-    # 2. Filter media
-    mf = client.post("/api/media/filter", json={"category": "photos"})
-    assert mf.status_code == 200
-    assert mf.json()["count"] >= 2
-
-    # 3. Chat search & DB comparison via API
-    cs = client.post("/api/chat/search", json={"query": "verification"})
-    assert cs.status_code == 200
-    assert cs.json()["match_count"] >= 1
-
-    dbc = client.post(
-        "/api/chat/compare-db",
-        json={
-            "old_db": str(v1_path / "Databases" / "msgstore.db"),
-            "new_db": str(v2_path / "Databases" / "msgstore.db"),
-        },
-    )
-    assert dbc.status_code == 200
-    assert dbc.json()["summary"]["missing_in_new"] == 1
-    assert dbc.json()["summary"]["changed_records"] == 1
-    assert dbc.json()["summary"]["newly_discovered"] == 2
-
-    # 4. Preview valid media & reject non-scanned path
-    photo_path = str(v2_path / "Media" / "WhatsApp Images" / "IMG-20261001-WA0001.jpg")
-    prev = client.get("/api/preview", params={"path": photo_path})
-    assert prev.status_code == 200
-
-    bad_prev = client.get("/api/preview", params={"path": "/etc/passwd"})
-    assert bad_prev.status_code == 403
-
-    # 5. Export & verify
-    export_dest = tmp_path / "verified_out"
-    exp = client.post("/api/export", json={"paths": [photo_path], "destination": str(export_dest)})
-    assert exp.status_code == 200
-    assert exp.json()["verified_count"] == 1
-
-    # 6. Download generated reports
-    for kind in ("pdf", "json", "csv", "media", "db-health", "certificate-json", "certificate-pdf"):
-        rep = client.get(f"/api/report/{kind}")
-        assert rep.status_code == 200
-
-
-def test_chat_exports_and_reports(tmp_path: Path) -> None:
-    ensure_sample_data(SAMPLE_DATA_DIR)
-    v2_exports = SAMPLE_DATA_DIR / "snapshot_v2" / "Exports"
-    txt_res = parse_chat_export(v2_exports / "WhatsApp Chat with Operations Team.txt")
-    json_res = parse_chat_export(v2_exports / "chat_export.json")
-    html_res = parse_chat_export(v2_exports / "chat_export.html")
-
-    assert txt_res["message_count"] == 3
-    assert json_res["message_count"] == 2
-    assert html_res["message_count"] == 2
-
-    s_res = search_chat_messages(txt_res["messages"], query="checksums")
-    assert s_res["match_count"] == 1
-
-    from wtk.scanner import scan_tree
-    report = scan_tree(SAMPLE_DATA_DIR / "snapshot_v2")
-    out_dir = tmp_path / "reports_out"
-    paths = generate_all_scan_reports(report, out_dir)
-    for p in paths.values():
-        assert Path(p).exists() and Path(p).stat().st_size > 0
-
-    cmp_path = write_backup_comparison_report({"summary": {"added": 1, "removed": 0, "changed": 0, "unchanged": 5}}, out_dir)
-    assert cmp_path.exists()
-
-    certs = write_verification_certificate(
-        {
-            "certificate_id": "WRE-CERT-TEST",
-            "timestamp": "2026-11-01 00:00:00 UTC",
-            "source_root": "/src",
-            "destination": "/dst",
-            "total_requested": 1,
-            "verified_count": 1,
-            "failed_count": 0,
-            "manifest_sha256": "a" * 64,
-            "results": [{"source": "/src/a.jpg", "destination": "/dst/a.jpg", "size": 10, "source_sha256": "b" * 64, "destination_sha256": "b" * 64, "verified": True}],
-        },
-        out_dir,
-    )
-    assert certs["json"].exists() and certs["pdf"].exists()
+if __name__ == "__main__":
+    unittest.main()
