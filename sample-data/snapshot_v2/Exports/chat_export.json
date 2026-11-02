@@ -2,13 +2,13 @@
   "messages": [
     {
       "id": "101",
-      "sender": "Participant Alpha",
+      "sender": "participant_a@s.whatsapp.net",
       "timestamp": "2026-10-15 09:15:00 UTC",
       "text": "JSON export test record 1"
     },
     {
       "id": "102",
-      "sender": "Participant Beta",
+      "sender": "participant_b@s.whatsapp.net",
       "timestamp": "2026-10-15 09:16:00 UTC",
       "text": "JSON export test record 2"
     }

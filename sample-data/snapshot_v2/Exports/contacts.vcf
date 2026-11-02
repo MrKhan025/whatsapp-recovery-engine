@@ -1,0 +1,10 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Participant Alpha
+TEL:participant_a@s.whatsapp.net
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Participant Beta
+TEL:participant_b@s.whatsapp.net
+END:VCARD
