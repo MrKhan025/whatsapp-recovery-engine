@@ -19,7 +19,7 @@
 
 > **Forensic & Ethical Notice:** This project is an independent, read-only diagnostic and recovery-assistance platform for inspecting **files you own or are explicitly authorized to analyze**. It **never** bypasses WhatsApp encryption, **never** decrypts `.crypt12/.crypt14/.crypt15` files without a user-owned key/official restore flow, **never** bypasses OTPs, device locks, or Android Scoped Storage restrictions, and **never** claims guaranteed recovery of permanently deleted data.
 
-## ✨ Key Capabilities & Roadmap Features Included in v1.0
+## ✨ Key Capabilities & Features (v1.0)
 
 | Module | Core Capabilities | Forensic Safety & Verification |
 | :--- | :--- | :--- |
@@ -31,133 +31,293 @@
 | **6. Multi-Format Forensic Reporting & Bundle** (`wtk/reports.py`) | Generates **8 downloadable outputs**: PDF Report, JSON Scan Report, CSV Inventory, Backup Comparison, Media Recovery, DB Health, Verification Certificate & **One-Click Forensic Evidence Bundle (`.zip` with `SHA256SUMS.txt`)**. | Every report includes UTC timestamps, file counts, SHA-256 digests, anomaly warnings, and explicit technical limitations. |
 | **7. Responsive 8-Tab Web Dashboard** (`web/`) | **Overview, Chat Analyzer, Backup Analyzer, Media Recovery, Duplicate Finder, Recovery Verification, Recovery Reports & Settings**. | Built-in **Dark & Light Themes** plus **English, Hindi (हिन्दी) & Urdu (اردو RTL)** multi-language support. |
 
-## 🏗️ System Architecture
+## 🚀 Step-by-Step Guide to Execute This Repository
 
-```text
-whatsapp-recovery-engine/
-├── wtk/                        # Core Python Package (v1.0.0)
-│   ├── __init__.py             # Version & package metadata
-│   ├── __main__.py             # `python -m wtk` entry point
-│   ├── api.py                  # FastAPI REST backend & static dashboard mount
-│   ├── cli.py                  # Command-Line Interface (scan, compare, inspect-db, serve, etc.)
-│   ├── scanner.py              # Read-only directory tree scanner & inventory orchestrator
-│   ├── chat_analyzer.py        # SQLite + WAL inspector, Chat-Media Linker, TXT/JSON/HTML parser & DB diff
-│   ├── media_engine.py         # 8-category classifier, EXIF/filename date reconstruction & SHA-256 deduplicator
-│   ├── backup_analyzer.py      # .crypt12/.crypt14/.crypt15 metadata analyzer & Backup Health Report
-│   ├── decryptor.py            # Legitimate user-supplied 32-byte key AES-256-GCM decryptor
-│   ├── estimator.py            # Qualitative Recovery Readiness Estimator (Low / Medium / High)
-│   ├── verification.py         # Pre/post-copy SHA-256 verified export & Certificate generator
-│   ├── reports.py              # 7 report formats + Forensic Evidence Bundle (.zip + SHA256SUMS.txt)
-│   ├── adb.py                  # Authorized read-only ADB diagnostics & Android/Termux guidance
-│   ├── security.py             # Path traversal guard, symlink chain validator & dependency auditor
-│   ├── i18n.py                 # English, Hindi & Urdu (RTL) translations
-│   └── sample_bootstrap.py     # Self-healing zero-PII synthetic sample dataset generator
-├── web/                        # Responsive Single-Page Forensic Dashboard
-│   ├── index.html              # 8-tab responsive UI with Dark/Light mode
-│   ├── style.css               # Modern adaptive styling & RTL support
-│   └── app.js                  # Interactive API client, filters, media player & report downloads
-├── scripts/
-│   └── termux-install.sh       # One-command Android Termux setup & launcher script
-├── docs/
-│   ├── screenshots/
-│   │   └── dashboard-preview.svg
-│   ├── RECOVERY-GUIDE.md       # Step-by-step user recovery workflow
-│   └── SECURITY.md             # Operational security checklist
-├── sample-data/                # Zero-PII Synthetic Test Snapshots (auto-initialized if missing)
-│   ├── snapshot_v1/            # Earlier backup snapshot (SQLite msgstore.db, .crypt14, media)
-│   └── snapshot_v2/            # Newer backup snapshot (8 media categories, exports, DB changes)
-├── tests/                      # Automated Pytest Suite (19 comprehensive unit & integration tests)
-│   ├── test_scanner.py         # Backup discovery, SQLite integrity, 8 categories, symlinks & traversal
-│   ├── test_engine.py          # Snapshot comparison, multi-snapshot diff & verified export
-│   └── test_api.py             # FastAPI endpoints, WAL, EXIF, user-key decryptor & Forensic Bundle
-├── .github/
-│   ├── workflows/ci.yml        # GitHub Actions CI (Pytest + Bandit Security Linter + pip-audit)
-│   ├── dependabot.yml          # Weekly automated dependency security updates
-│   ├── PULL_REQUEST_TEMPLATE.md
-│   └── ISSUE_TEMPLATE/bug_report.md
-├── Dockerfile                  # Non-root hardened container image
-├── docker-compose.yml          # Loopback-bound (127.0.0.1:8000) read-only Compose service
-├── pyproject.toml              # Package build configuration & pytest settings
-├── requirements.txt            # Production dependencies
-├── requirements-dev.txt        # Testing & security audit dependencies
-├── requirements-termux.txt     # Termux-compatible dependencies
-├── CONTRIBUTING.md             # Contributor & ethical compliance guidelines
-├── CHANGELOG.md                # Release history (v1.0.0)
-├── SECURITY.md                 # Security & privacy guarantees
-└── LICENSE                     # MIT License
+Choose your platform below (**Android Termux**, **Windows**, **Linux / macOS**, or **Docker**) and follow the numbered steps in order.
+
+### Platform 1: Execute on Android via Termux (Step-by-Step)
+
+> **Important Note for Termux Users:** Never run `pip install --upgrade pip` on Termux (Termux forbids upgrading `pip` via `pip` and will show an error). Always use `--extra-index-url https://termux-user-repository.github.io/pypi/` so `pydantic-core` installs from prebuilt Android binary wheels in 1 second without needing Rust or `maturin`.
+
+#### Step 1: Install Required System Packages in Termux
+Open Termux and run:
+```bash
+pkg update -y && pkg upgrade -y
+pkg install -y python git libjpeg-turbo freetype
 ```
 
-## 🚀 Step-by-Step Execution Guide
-
-### Option 1: Run on Android via Termux (One-Line Installer or Manual Steps)
-
-1. Install **Termux** on your Android device, clone the repository, and run the one-step installer:
-   ```bash
-   pkg update -y && pkg install -y git
-   git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
-   cd whatsapp-recovery-engine
-   bash scripts/termux-install.sh
-   ```
-   *(Or run the manual steps: `pkg install -y python git libjpeg-turbo freetype`, `termux-setup-storage`, `pip install -r requirements-termux.txt`, and `python -m wtk serve --host 127.0.0.1 --port 8000`.)*
-
-2. Open **`http://127.0.0.1:8000`** in Chrome/Firefox on your Android phone and scan your accessible WhatsApp shared folder:
-   * **Android 11+ Path:** `/storage/emulated/0/Android/media/com.whatsapp/WhatsApp`
-   * **Android 10 & Earlier Path:** `/storage/emulated/0/WhatsApp`
-
-### Option 2: Run on Windows, Linux, or macOS (Step-by-Step)
-
+#### Step 2: Grant Android Shared Storage Permission
+Run the command below and tap **"Allow"** on the Android popup so Termux can read your shared storage folders:
 ```bash
-# 1. Clone the repository
+termux-setup-storage
+```
+
+#### Step 3: Clone the Repository & Enter the Folder
+```bash
+cd ~
+rm -rf whatsapp-recovery-engine
+git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
+cd whatsapp-recovery-engine
+```
+
+#### Step 4: Install Python Dependencies (Using Prebuilt Termux Wheels)
+```bash
+pip install --extra-index-url https://termux-user-repository.github.io/pypi/ -r requirements-termux.txt
+pip install uvicorn
+```
+*(Or simply run our one-line setup script: `bash scripts/termux-install.sh`)*
+
+#### Step 5: Start the Web Dashboard Server
+You can start the server using **any** of these three commands:
+```bash
+python main.py
+# OR:
+python -m wtk serve --host 127.0.0.1 --port 8000
+```
+
+#### Step 6: Open the Dashboard in Your Android Browser
+1. Leave Termux running in the background.
+2. Open **Chrome** or **Firefox** on your phone and go to:
+   ```text
+   http://127.0.0.1:8000
+   ```
+3. To test immediately with sample data, tap **"Load Sample Snapshot (v2)"** and tap **"Scan Folder"**.
+4. To scan your real WhatsApp folder on your phone, paste one of these paths into the scan box and tap **"Scan Folder"**:
+   * **Android 11, 12, 13, 14, 15+ Path:**
+     ```text
+     /storage/emulated/0/Android/media/com.whatsapp/WhatsApp
+     ```
+   * **Termux Shared Storage Alias Path:**
+     ```text
+     /data/data/com.termux/files/home/storage/shared/Android/media/com.whatsapp/WhatsApp
+     ```
+   * **Android 10 & Earlier Path:**
+     ```text
+     /storage/emulated/0/WhatsApp
+     ```
+
+### Platform 2: Execute on Windows 10 / 11 (Step-by-Step)
+
+#### Method A: One-Click Windows Launcher (`start.bat`)
+1. Download and install [Python 3.10+](https://www.python.org/downloads/windows/) (check **"Add python.exe to PATH"** during installation).
+2. Clone or extract `whatsapp-recovery-engine` to a folder on your PC.
+3. Double-click **`start.bat`** inside the folder. It will automatically create `.venv`, install all requirements, and start the dashboard at `http://127.0.0.1:8000`.
+
+#### Method B: Manual PowerShell Step-by-Step
+Open **PowerShell** and run:
+```powershell
+# Step 1: Clone the repository and enter the directory
 git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
 cd whatsapp-recovery-engine
 
-# 2. Create & activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
+# Step 2: Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 
-# 3. Install dependencies
+# Step 3: Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. Initialize synthetic sample datasets & start the dashboard
-python -m wtk init-sample
-python -m wtk serve --host 127.0.0.1 --port 8000
+# Step 4: Initialize sample datasets and start the server
+python main.py init-sample
+python main.py
+```
+Open **`http://127.0.0.1:8000`** in Microsoft Edge, Chrome, or Firefox.
+
+### Platform 3: Execute on Linux & macOS (Step-by-Step)
+
+```bash
+# Step 1: Clone the repository
+git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
+cd whatsapp-recovery-engine
+
+# Step 2: Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Step 3: Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Step 4: Initialize sample datasets and start the server
+python3 main.py init-sample
+python3 main.py
 ```
 Open **`http://127.0.0.1:8000`** in your browser.
 
-### Option 3: Command-Line Interface (CLI) Reference
+### Platform 4: Execute with Docker (Step-by-Step)
 
 ```bash
-# 1. Initialize synthetic sample datasets (snapshot_v1 and snapshot_v2)
-python -m wtk init-sample
+git clone https://github.com/MrKhan025/whatsapp-recovery-engine.git
+cd whatsapp-recovery-engine
+docker compose up --build
+```
+Open **`http://127.0.0.1:8000`**. The container runs as a non-root user (`uid 10001`) with a read-only root filesystem and binds strictly to loopback (`127.0.0.1`).
 
-# 2. Scan an accessible folder and generate all reports + Forensic Bundle (.zip)
-python -m wtk scan --source ./sample-data/snapshot_v2 --output ./reports
+## 📱 Step-by-Step Guide to Connect with ADB (USB & Wireless)
 
-# 3. Compare two saved scan snapshots
-python -m wtk compare ./reports/scan-*.json
+WhatsApp Recovery Engine includes read-only ADB connection diagnostics (`wtk/adb.py`) to detect authorized Android devices, inspect device properties (`manufacturer`, `model`, `android_version`, `sdk_int`), and help you inspect authorized shared WhatsApp folders.
 
-# 4. Inspect an accessible SQLite chat database (and companion -wal file) in read-only mode
-python -m wtk inspect-db ./sample-data/snapshot_v2/Databases/msgstore.db
+### Scenario A: Connect an Android Phone to a PC (Windows / Linux / macOS) via USB Cable
 
-# 5. Compare two accessible SQLite chat databases at the message record level
-python -m wtk compare-db ./sample-data/snapshot_v1/Databases/msgstore.db ./sample-data/snapshot_v2/Databases/msgstore.db
+#### Step 1: Enable Developer Options & USB Debugging on Your Android Phone
+1. Open your phone's **Settings** → **About Phone** (or **About Device**).
+2. Locate **Build Number** (on Xiaomi/MIUI, tap **OS Version**; on Oppo/Realme, tap **Version** → **Build Number**) and tap it **7 times** rapidly until you see *"You are now a developer!"*.
+3. Go back to **Settings** → **System** (or **Additional Settings**) → **Developer Options**.
+4. Toggle **Developer Options** ON, scroll down, and enable **USB Debugging**.
 
-# 6. Parse a user-provided TXT, JSON, or HTML chat export
-python -m wtk parse-export ./sample-data/snapshot_v2/Exports/chat_export.json
+#### Step 2: Install ADB (`android-platform-tools`) on Your Computer
+* **Windows (via Winget in PowerShell):**
+  ```powershell
+  winget install Google.PlatformTools
+  ```
+* **Ubuntu / Debian / Kali Linux:**
+  ```bash
+  sudo apt update && sudo apt install -y adb
+  ```
+* **macOS (via Homebrew):**
+  ```bash
+  brew install android-platform-tools
+  ```
 
-# 7. Check ADB device status and Android storage guidance
-python -m wtk adb-check
+#### Step 3: Connect via USB & Authorize Your Computer
+1. Connect your Android phone to your computer using a **data-capable USB cable** (set USB mode on the phone notification to **File Transfer / MTP**).
+2. Run this command in your computer terminal:
+   ```bash
+   adb devices -l
+   ```
+3. Look at your phone screen: a popup titled **"Allow USB debugging?"** will appear.
+4. Check **"Always allow from this computer"** and tap **"Allow"**.
+5. Run `adb devices -l` again and confirm the status changed from `unauthorized` to **`device`**:
+   ```text
+   List of devices attached
+   R58M42XXXXX    device product:dm3q model:SM_S918B device:dm3q transport_id:1
+   ```
 
-# 8. Run local security & dependency posture audit
-python -m wtk security-audit
+#### Step 4: Verify ADB Connection in WhatsApp Recovery Engine
+Run the CLI diagnostic check or check the **Settings** tab in the dashboard:
+```bash
+python main.py adb-check
+```
+You will see your connected device's serial, authorization state (`"authorized": true`), manufacturer, model, and Android version.
+
+#### Step 5: Copy Your Authorized Shared WhatsApp Folder to Your PC for Inspection (Optional)
+If you want to analyze your phone's accessible WhatsApp shared folder on your PC:
+```bash
+mkdir -p ./my-phone-whatsapp
+# For Android 11+:
+adb pull /sdcard/Android/media/com.whatsapp/WhatsApp ./my-phone-whatsapp
+# For Android 10 and earlier:
+# adb pull /sdcard/WhatsApp ./my-phone-whatsapp
+```
+Then scan `./my-phone-whatsapp/WhatsApp` in the dashboard at `http://127.0.0.1:8000` or via CLI:
+```bash
+python main.py scan --source ./my-phone-whatsapp/WhatsApp --output ./reports
 ```
 
-## 🧪 Running Automated Tests & Security Checks
+### Scenario B: Connect ADB Wirelessly Inside Termux on the Same Phone (Android 11+ — No PC Required!)
+
+If you are running Termux directly on an Android 11+ phone and want ADB connected locally without a computer:
+
+#### Step 1: Install `android-tools` in Termux
+```bash
+pkg install -y android-tools
+```
+
+#### Step 2: Open Developer Options in Split-Screen Mode
+1. Connect your phone to a Wi-Fi network (or enable Wi-Fi).
+2. Go to **Settings** → **Developer Options** → enable **Wireless Debugging** and tap the text **Wireless Debugging** to open its submenu.
+3. Put **Settings** and **Termux** in **Split-Screen view** (important: if Settings closes in the background, Android resets the pairing code!).
+
+#### Step 3: Pair & Connect ADB in Termux
+1. In the Wireless Debugging screen, tap **"Pair device with pairing code"**. Note the **IP address & Port** (e.g., `192.168.1.5:39451`) and the **6-digit Wi-Fi pairing code**.
+2. In the Termux half of the screen, run:
+   ```bash
+   adb pair 127.0.0.1:<PAIRING_PORT>
+   ```
+   *(Replace `<PAIRING_PORT>` with the 5-digit port shown in the popup, then type the 6-digit code and press Enter.)*
+3. Next, look at the main **Wireless Debugging** screen under **"IP address & Port"** (note: this port is different from the pairing port!) and run:
+   ```bash
+   adb connect 127.0.0.1:<CONNECT_PORT>
+   ```
+4. Verify your device is connected and authorized:
+   ```bash
+   adb devices -l
+   python main.py adb-check
+   ```
+
+### Scenario C: ADB Troubleshooting Quick Reference
+
+| ADB State / Symptom | Cause | Solution |
+| :--- | :--- | :--- |
+| **`unauthorized`** | You haven't tapped **"Allow"** on the phone's USB debugging popup yet. | Unlock your phone screen, run `adb kill-server && adb devices`, and tap **"Allow"** on the prompt. |
+| **`offline`** | ADB daemon connection timed out or wireless port changed. | Unplug/replug the USB cable (or run `adb reconnect`), or re-run `adb connect 127.0.0.1:<PORT>`. |
+| **Empty list under `List of devices attached`** | Charge-only USB cable or USB mode set to Charging Only. | Switch to a data-transfer USB cable and set the Android USB notification to **File Transfer (MTP)**. |
+| **`ADB not installed or not on PATH`** | `adb` binary is not installed. | In Termux, run `pkg install -y android-tools`. On Ubuntu/Debian, run `sudo apt install -y adb`. |
+
+## 🖥️ Step-by-Step Walkthrough of the 8 Dashboard Tabs (`http://127.0.0.1:8000`)
+
+Once the server is running and you open `http://127.0.0.1:8000`:
+
+1. **Overview Tab:** Enter your folder path (or click **"Load Sample Snapshot (v2)"**) and click **"Scan Folder"**. View total scanned files, media counts across all 8 categories, the **Recovery Readiness Assessment (Low / Medium / High)**, supporting forensic evidence, missing requirements, and scan history.
+2. **Chat Analyzer Tab:** View accessible SQLite databases (`msgstore.db`, `wa.db`), check `PRAGMA integrity_check` status and companion `-wal` uncheckpointed frame counts, search messages by keyword or sender across SQLite and **TXT/JSON/HTML** exports, and compare two SQLite databases (`snapshot_v1/Databases/msgstore.db` vs `snapshot_v2/Databases/msgstore.db`) to find missing historical messages.
+3. **Backup Analyzer Tab:** Inspect `.crypt12`, `.crypt14`, and `.crypt15` backups by size, timestamp, embedded date, and SHA-256 without modifying them, spot `0 B` or suspicious backups, and compare two or more saved scan snapshots.
+4. **Media Recovery Tab:** Filter discovered media by category (**Photos, Videos, Voice Notes, Audio, Documents, Stickers, GIFs, Thumbnails**), byte size, filename, or corruption status. Click **"Preview"** to view images, play videos, or listen to voice notes inline.
+5. **Duplicate Finder Tab:** Inspect cryptographic SHA-256 duplicate groups and see exact reclaimable storage in bytes.
+6. **Recovery Verification Tab:** Select media files in the Media Recovery tab, enter a safe destination path outside the scanned source (e.g., `/tmp/verified-export`), and click **"Export Selected & Verify SHA-256"** to verify pre-copy and post-copy hashes and issue a **Verification Certificate**.
+7. **Recovery Reports Tab:** Download any of the **8 forensic outputs** with one click:
+   * Comprehensive Forensic PDF Report (`recovery-report.pdf`)
+   * Full JSON Scan Inventory (`recovery-scan.json`)
+   * CSV File Inventory (`file-inventory.csv`)
+   * Backup Comparison Report (`backup-comparison-report.json`)
+   * Media Recovery Report (`media-recovery-report.json`)
+   * Database Health Report (`database-health-report.json`)
+   * Recovery Verification Certificate (`verification-certificate.pdf` & `.json`)
+   * **Complete Forensic Evidence Bundle (`forensic-evidence-bundle.zip` with `SHA256SUMS.txt`)**
+8. **Settings Tab:** Toggle **Dark / Light Theme**, switch interface language between **English, Hindi (हिन्दी), and Urdu (اردو RTL)**, refresh **ADB Diagnostics**, and view the live **Security & Privacy Audit**.
+
+## ⌨️ Complete CLI Command Reference
+
+You can run every tool directly from the terminal using either `python main.py <command>` or `python -m wtk <command>`:
+
+```bash
+# Start the local web dashboard at http://127.0.0.1:8000 (default when no command is given)
+python main.py
+python main.py serve --host 127.0.0.1 --port 8000
+
+# Initialize synthetic zero-PII sample datasets (snapshot_v1 and snapshot_v2)
+python main.py init-sample
+
+# Scan a directory in read-only mode and generate all reports + Forensic Bundle (.zip)
+python main.py scan --source ./sample-data/snapshot_v2 --output ./reports
+
+# Compare two saved scan snapshot JSON files
+python main.py compare ./reports/scan-old.json ./reports/scan-new.json
+
+# Inspect an accessible SQLite chat database and companion -wal file in read-only mode
+python main.py inspect-db ./sample-data/snapshot_v2/Databases/msgstore.db
+
+# Compare two accessible SQLite chat databases at the message record level
+python main.py compare-db ./sample-data/snapshot_v1/Databases/msgstore.db ./sample-data/snapshot_v2/Databases/msgstore.db
+
+# Parse a user-provided TXT, JSON, or HTML WhatsApp chat export
+python main.py parse-export ./sample-data/snapshot_v2/Exports/chat_export.json
+
+# Copy and verify files with pre-copy and post-copy SHA-256 checksums
+python main.py verify-export --source ./sample-data/snapshot_v2 --destination ./verified-out ./sample-data/snapshot_v2/Media/WhatsApp\ Images/IMG-20261001-WA0001.jpg
+
+# Check ADB device connection status and Android storage guidance
+python main.py adb-check
+
+# Run local security and dependency posture audit
+python main.py security-audit
+```
+
+## 🧪 Automated Testing & Security Verification
 
 ```bash
 pip install -r requirements-dev.txt
-python -m wtk init-sample
+python main.py init-sample
 python -m pytest -v
 bandit -q -ll -r wtk
 pip-audit -r requirements.txt
