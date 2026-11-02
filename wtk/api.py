@@ -178,7 +178,7 @@ def scan(
     try:
         safe_dir = validate_safe_path(source, must_exist=True, allow_symlinks=False)
         report = scan_tree(safe_dir, enable_ai=enable_ai)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{len(SCAN_HISTORY) + 1:03d}"
         snap_file = write_json(report, REPORT_DIR, f"scan-{stamp}.json")
         generate_all_scan_reports(report, REPORT_DIR)
         LAST_REPORT = report
@@ -230,16 +230,31 @@ def get_history() -> dict[str, Any]:
 @app.get("/api/snapshots")
 def snapshots() -> dict[str, Any]:
     """List saved scan snapshots available for comparison."""
-    snaps = [
-        {
-            "name": p.name,
-            "path": str(p),
-            "modified": int(p.stat().st_mtime),
-            "size": p.stat().st_size,
-        }
-        for p in sorted(REPORT_DIR.glob("scan-*.json"))[-40:]
-    ]
-    return {"snapshots": snaps}
+    seen: dict[str, dict[str, Any]] = {}
+    for p in sorted(REPORT_DIR.glob("scan-*.json"))[-40:]:
+        try:
+            st = p.stat()
+            seen[str(p)] = {
+                "name": p.name,
+                "path": str(p),
+                "modified": int(st.st_mtime),
+                "size": st.st_size,
+            }
+        except OSError:
+            continue
+    for item in SCAN_HISTORY[-40:]:
+        sp = item.get("snapshot_path")
+        if sp and sp not in seen:
+            p = Path(sp)
+            if p.exists():
+                st = p.stat()
+                seen[sp] = {
+                    "name": p.name,
+                    "path": sp,
+                    "modified": int(st.st_mtime),
+                    "size": st.st_size,
+                }
+    return {"snapshots": list(seen.values())}
 
 
 @app.post("/api/compare")
